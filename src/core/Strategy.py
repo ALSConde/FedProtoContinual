@@ -6,7 +6,7 @@ class Strategy(ABC):
     model = None
     model_old = None
     dataset = None
-    epochs = 1
+    epochs: int = 1
     optimizer = None
     device = None
 

@@ -11,15 +11,15 @@ class LwFPlugin(Plugins):
         self,
         beta: float = 1.0,
         temperature: float = 2.0,
-        distill_on: str = "features",  # "features" ou "logits"
+        distill_on: str = "features",  # "features" or "logits"
     ):
         """
         Args:
-            beta:         peso da loss de distilação relativa à task loss.
-            temperature:  temperatura do KD (suaviza distribuições).
-            distill_on:   onde aplicar a distilação.
-                          "features" → KL nas embeddings normalizadas (recomendado para protótipos).
-                          "logits"   → KL nas similaridades cosseno com os protótipos.
+            beta:         weight of the distillation loss relative to the task loss.
+            temperature:  temperature of the KD (smooths the distributions).
+            distill_on:   where to apply the distillation.
+                          "features" → KL on the normalized embeddings.
+                          "logits"   → KL on the cosine similarities with the prototypes.
         """
         super().__init__()
         self.beta = beta
@@ -61,7 +61,7 @@ class LwFPlugin(Plugins):
     def _teacher_forward(self, strategy, x: torch.Tensor) -> torch.Tensor:
         if hasattr(strategy.model, "global_forward"):
             return strategy.model.global_forward(x)
-        return self.teacher(x)
+        return self.teacher(x) # type: ignore
 
     def _student_forward(self, strategy, x: torch.Tensor) -> torch.Tensor:
         if self.distill_on == "features" and hasattr(
@@ -71,7 +71,7 @@ class LwFPlugin(Plugins):
         return strategy.mb_output
 
     # ------------------------------------------------------------------
-    # Loss de distilação
+    # Distillation loss
     # ------------------------------------------------------------------
 
     def _distillation_loss(
@@ -82,14 +82,14 @@ class LwFPlugin(Plugins):
         T = self.temperature
 
         if self.distill_on == "features":
-            # Normaliza as features antes de aplicar a temperatura
+            # Normalize the features to get cosine similarities
             s = F.normalize(student_out, dim=1)
             t = F.normalize(teacher_out, dim=1)
         else:
             s = student_out
             t = teacher_out
 
-        q = F.softmax(t / T, dim=1)  # distribuição alvo (professor)
-        log_p = F.log_softmax(s / T, dim=1)  # log-distribuição do aluno
+        q = F.softmax(t / T, dim=1)  # target distribution (teacher)
+        log_p = F.log_softmax(s / T, dim=1)  # log-distribution of the student
 
         return F.kl_div(log_p, q, reduction="batchmean") * (T**2)

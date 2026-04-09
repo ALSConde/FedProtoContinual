@@ -26,10 +26,10 @@ def partition_data_dirichlet(dataset, n_clients, alpha):
 
 if __name__ == "__main__":
     transform = transforms.Compose([transforms.ToTensor()])
-    train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+    train_dataset = datasets.CIFAR10(root='./storage/train_data', train=True, download=True, transform=transform)
 
     N_CLIENTS = 10
-    ALPHA = 1000.0  # low alpha means more heterogeneity (more than 100 is considered IID)
+    ALPHA = 0.05  # low alpha means more heterogeneity (more than 100 is considered IID)
 
     indices_por_cliente = partition_data_dirichlet(train_dataset, N_CLIENTS, ALPHA)
 
