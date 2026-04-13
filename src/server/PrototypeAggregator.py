@@ -100,7 +100,9 @@ class PrototypeAggregator:
                 self.initialized[c] = True
             else:
                 # EMA adaptive: α_c = 1 - exp(-total_c / τ)
-                alpha_c = 1.0 - torch.exp(torch.tensor(-total_n[c] / self.tau)).item()
+                total_c = total_n[c].detach().item()
+                tau = torch.tensor(self.tau, dtype=torch.float)
+                alpha_c = 1.0 - torch.exp(-total_c / tau).item()
                 self.mu_global[c] = (1.0 - alpha_c) * self.mu_global[
                     c
                 ] + alpha_c * mu_new[i]

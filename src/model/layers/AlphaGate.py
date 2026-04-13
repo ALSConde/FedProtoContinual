@@ -21,11 +21,11 @@ class AlphaGate(nn.Module):
 
         self.alpha_param = nn.Parameter(torch.tensor(init_alpha))
 
-    def forward(self):
+    def forward(self, global_features, local_features):
         B = -F.softplus(self.alpha_param)
         alpha = torch.sigmoid(B)
 
-        return alpha
+        return global_features + alpha * local_features
 
 
 if __name__ == "__main__":

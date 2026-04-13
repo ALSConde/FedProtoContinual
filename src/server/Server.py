@@ -6,27 +6,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import datetime
 
+from model.Models import Model
 from src.utils.load_centralized_data import load_centralized_data
 from src.utils.test import test
-
-
-class SimpleNet(nn.Module):
-    def __init__(self):
-        super(SimpleNet, self).__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.fc3(x)
 
 
 class Server:
@@ -35,11 +17,11 @@ class Server:
         self.strategy = strategy
 
         # configs
-        self.num_rounds: int = context.run_config["num_rounds"]
-        self.lr: float = context.run_config["learning-rate"]
+        self.num_rounds: int = int(context.run_config["num_rounds"])
+        self.lr: float = float(context.run_config["learning-rate"])
 
     def execute(self):
-        global_model = SimpleNet()
+        global_model = Model()
         arrays = ArrayRecord(global_model.state_dict())
 
         result = self.strategy.start(
@@ -54,16 +36,18 @@ class Server:
         model_name = (
             datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_model.pth"
         )
-        torch.save(state_dict, f"./src/storage/{model_name}")
+        torch.save(state_dict, f"./storage/{model_name}")
 
     def global_evaluate(self, server_round: int, arrays: ArrayRecord) -> MetricRecord:
-        model = SimpleNet()
+        model = Model()
         model.load_state_dict(arrays.to_torch_state_dict())
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
 
         test_loader = load_centralized_data()
 
-        test_loss, test_acc = test(model, test_loader, criterion=torch.nn.CrossEntropyLoss(), device=device)
+        test_loss, test_acc = test(
+            model, test_loader, criterion=torch.nn.CrossEntropyLoss(), device=device
+        )
 
         return MetricRecord({"accuracy": test_acc, "loss": test_loss})
