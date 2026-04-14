@@ -7,8 +7,7 @@ class LinearAttention(nn.Module):
     def __init__(self, d_q, d_kv, d_att, mem_size=16, eps=1e-6):
         super().__init__()
         self.proj_Q = nn.Linear(d_q, d_att)
-        self.proj_K = nn.Linear(d_kv, d_att)
-        self.proj_V = nn.Linear(d_kv, d_att)
+        self.proj_KV = nn.Linear(d_kv, d_att)
         self.eps = eps
 
         self.k_mem = nn.Parameter(torch.empty(mem_size, d_att))
@@ -22,8 +21,8 @@ class LinearAttention(nn.Module):
 
     def forward(self, q, k, v):
         Q = self.elu_feature_map(self.proj_Q(q))  # (n, l, d)
-        k = self.elu_feature_map(self.proj_K(k))  # (n, s, d)
-        v = self.proj_V(v)
+        k = self.elu_feature_map(self.proj_KV(k))  # (n, s, d)
+        v = self.proj_KV(v)
 
         # Append memory vectors to K and V
         K = torch.cat([k, self.k_mem.expand(Q.size(0), -1, -1)], dim=1)

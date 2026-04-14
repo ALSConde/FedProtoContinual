@@ -29,6 +29,10 @@ class PrototypeClassifier(nn.Module):
         self.embedding_dim = embedding_dim
         self.num_classes = 0
 
+        self.scale = nn.Parameter(
+            torch.tensor(20.0)
+        )  # Learnable scale for sharper softmax distribution, as in cosine classifiers
+
         self.register_buffer(
             "prototypes",
             torch.empty(0, embedding_dim),
@@ -47,7 +51,7 @@ class PrototypeClassifier(nn.Module):
 
         Returns:
             logits: shape (batch_size, num_classes)
-                    values in [-1, 1], do not pass through softmax here
+                    values in [-1, 1], scaled by self.scale for sharper softmax distribution
         """
         if self.num_classes == 0:
             raise RuntimeError(
@@ -57,7 +61,7 @@ class PrototypeClassifier(nn.Module):
 
         h_norm = F.normalize(h, dim=1)  # (B, D)
         w_norm = F.normalize(self.prototypes, dim=1)  # (C, D)
-        return F.linear(h_norm, w_norm)  # (B, C)
+        return F.linear(h_norm, w_norm) * self.scale  # (B, C)
 
     # ------------------------------------------------------------------
     # Update via federated aggregation
