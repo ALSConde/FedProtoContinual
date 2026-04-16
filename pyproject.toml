@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "FedProtoContinual"
+version = "0.0.1"
+description = "Federated Learning With Prototype and Continual Learning"
+license = "Apache-2.0"
+dependencies = [
+    "flwr[simulation]>=1.26.0",
+    "flwr-datasets[vision]>=0.5.0",
+    "torch",
+    "torchvision",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.flwr.app]
+publisher = "ALSConde"
+
+[tool.flwr.app.components]
+serverapp = "src.main:app"
+clientapp = "src.client:app"
+
+[tool.flwr.app.config]
+num-server-rounds = 5
+num_rounds = 5
+fraction_evaluate = 0.5
+local-epochs = 1
+learning-rate = 0.001
+batch-size = 8
+
+[superlink]
+default = "local"
+
+[superlink.local-poc]
+address = "127.0.0.1:9093"
+insecure = true
+
+[superlink.local-custom-resources]
+options.num-supernodes = 1
+options.backend.client-resources.num-cpus = 1 # each ClientApp assumes to use 1 CPU (default is 2)
+options.backend.client-resources.num-gpus = 0.25 # each ClientApp uses 25% of VRAM (default is 0.0)
