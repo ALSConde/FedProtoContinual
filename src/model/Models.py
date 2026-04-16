@@ -11,28 +11,28 @@ class ModelSharedEncoder(nn.Module):
         super(ModelSharedEncoder, self).__init__()
 
         self.conv1 = nn.Conv2d(
-            3, 16, kernel_size=3, stride=1, padding=1
-        )  # 32x32x3 -> 32x32x16
-        self.norm1 = nn.GroupNorm(num_groups=2, num_channels=16)
+            3, 128, kernel_size=3, stride=1, padding=1
+        )  # 32x32x3 -> 32x32x128
+        self.norm1 = nn.GroupNorm(num_groups=2, num_channels=128)
         self.conv2 = nn.Conv2d(
-            16, 32, kernel_size=3, stride=2, padding=2
-        )  # 32x32x16 -> 17x17x32
-        self.norm2 = nn.GroupNorm(num_groups=4, num_channels=32)
+            128, 256, kernel_size=3, stride=2, padding=2
+        )  # 32x32x128 -> 17x17x256
+        self.norm2 = nn.GroupNorm(num_groups=4, num_channels=256)
         self.conv3 = nn.Conv2d(
-            32, 64, kernel_size=3, stride=2, padding=2
-        )  # 17x17x32 -> 10x10x64
-        self.norm3 = nn.GroupNorm(num_groups=8, num_channels=64)
+            256, 512, kernel_size=3, stride=2, padding=2
+        )  # 17x17x256 -> 10x10x512
+        self.norm3 = nn.GroupNorm(num_groups=8, num_channels=512)
 
         self.spatial_attention = LinearAttention(
             d_q=self.conv3.out_channels,
             d_kv=self.conv3.out_channels,
-            d_att=64,
-            mem_size=16,
+            d_att=512,
+            mem_size=64,
         )
-        self.spatial_norm = nn.GroupNorm(num_groups=8, num_channels=64)
+        self.spatial_norm = nn.GroupNorm(num_groups=8, num_channels=512)
 
         self.pooling = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(64, 1024)
+        self.fc = nn.Linear(512, 1024)
 
     def forward(self, x):
         x = F.relu(self.norm1(self.conv1(x)))
@@ -117,7 +117,8 @@ class Model(nn.Module):
         self.shared_encoder = ModelSharedEncoder()
         self.global_features = ModelGlobalFeatures()
         self.local_features = ModelLocalFeatures()
-        self.gate = AlphaGate(alpha_dim=512, init_alpha=0.5)
+        self.gate = AlphaGate(alpha_input=1024,alpha_dim=512, init_alpha=2.0)
+        self.fusion_norm = nn.LayerNorm(normalized_shape=[512])
         self.fc = nn.Linear(512, 512)
         self.classifier = PrototypeClassifier(embedding_dim=512)
 
@@ -129,12 +130,13 @@ class Model(nn.Module):
         shared_rep = self.shared_encoder(x)
         global_feat = self.global_features(shared_rep)
         local_feat = self.local_features(shared_rep)
-        fused_feat = self.gate(global_feat, local_feat)
-        fused_feat = self.gate(global_feat, torch.zeros_like(global_feat))
-        fused_feat = self.fc(fused_feat)
+        # fused_feat = global_feat
+        fused_feat = self.gate(global_feat, local_feat, shared_rep)
+        # fused_feat = self.fusion_norm(fused_feat)
+        fused_feat = F.gelu(self.fc(fused_feat))
         out = self.classifier(fused_feat)
 
-        return out, fused_feat
+        return out, fused_feat, global_feat, local_feat
 
     def global_forward(self, x):
         shared_rep = self.shared_encoder(x)
