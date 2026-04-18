@@ -6,6 +6,7 @@ class Strategy(ABC):
     model = None
     model_old = None
     dataset = None
+    data_test = None
     epochs: int = 1
     optimizer = None
     device = None
@@ -62,6 +63,7 @@ class Strategy(ABC):
             for mb_x, mb_y in self.dataset:  # type: ignore
                 self.mb_x = mb_x
                 self.mb_y = mb_y
+                self.mb_x, self.mb_y = self.mb_x.to(self.device), self.mb_y.to(self.device)
 
                 self.before_training_iteration()
                 self.mb_output, self.loss = self.forward()
@@ -86,5 +88,5 @@ class Strategy(ABC):
         self.optimizer.step()  # type: ignore
 
     @abstractmethod
-    def evaluate(self):
+    def evaluate(self) -> Tuple[Any, Any]:
         pass

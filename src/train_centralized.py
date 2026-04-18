@@ -6,8 +6,6 @@ from torchvision.transforms import (
     ToTensor,
     Normalize,
     Compose,
-    RandomHorizontalFlip,
-    RandomCrop,
 )
 import torch.nn.functional as F
 from model.layers.PrototypeMemory import PrototypeMemory
@@ -36,9 +34,7 @@ def train(model, train_loader, optimizer, loss_fn, memory, device, epoch):
             global_correct += (global_outputs.argmax(dim=1) == labels).sum().item()
 
         alpha_loss = (
-            torch.mean(model.gate.alpha)
-            if hasattr(model.gate, "alpha")
-            else 0.0
+            torch.mean(model.gate.alpha) if hasattr(model.gate, "alpha") else 0.0
         )
         ortho_loss = torch.mean(
             F.cosine_similarity(global_feat, local_feat, dim=-1).pow(2)
@@ -46,9 +42,7 @@ def train(model, train_loader, optimizer, loss_fn, memory, device, epoch):
 
         target_prototypes = model.classifier.prototypes[labels]
         compact_loss = (
-            F.mse_loss(h, target_prototypes)
-            if target_prototypes.shape[0] > 0
-            else 0.0
+            F.mse_loss(h, target_prototypes) if target_prototypes.shape[0] > 0 else 0.0
         )
 
         loss = (

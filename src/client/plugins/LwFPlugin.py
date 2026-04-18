@@ -84,7 +84,7 @@ class LwFPlugin(Plugins):
         if self.distill_on == "features":
             # Normalize the features to get cosine similarities
             s = F.normalize(student_out, dim=1)
-            t = F.normalize(teacher_out, dim=1)
+            t = F.normalize(teacher_out[0], dim=1) if isinstance(teacher_out, tuple) else F.normalize(teacher_out, dim=1)
         else:
             s = student_out
             t = teacher_out
