@@ -6,26 +6,43 @@ from .layers.LinearAttention import LinearAttention
 from .layers.PrototypeClassifier import PrototypeClassifier
 
 
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(
+            in_channels, out_channels, kernel_size=3, stride=stride, padding=1
+        )
+        self.norm1 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
+        self.conv2 = nn.Conv2d(
+            out_channels, out_channels, kernel_size=3, stride=1, padding=1
+        )
+        self.norm2 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
+                nn.GroupNorm(num_groups=8, num_channels=out_channels),
+            )
+
+    def forward(self, x):
+        out = F.relu(self.norm1(self.conv1(x)))
+        out = self.norm2(self.conv2(out))
+        out += self.shortcut(x)
+        return F.relu(out)
+
+
 class ModelSharedEncoder(nn.Module):
     def __init__(self):
         super(ModelSharedEncoder, self).__init__()
 
-        self.conv1 = nn.Conv2d(
-            3, 128, kernel_size=3, stride=1, padding=1
-        )  # 32x32x3 -> 32x32x128
-        self.norm1 = nn.GroupNorm(num_groups=2, num_channels=128)
-        self.conv2 = nn.Conv2d(
-            128, 256, kernel_size=3, stride=2, padding=2
-        )  # 32x32x128 -> 17x17x256
-        self.norm2 = nn.GroupNorm(num_groups=4, num_channels=256)
-        self.conv3 = nn.Conv2d(
-            256, 512, kernel_size=3, stride=2, padding=2
-        )  # 17x17x256 -> 10x10x512
-        self.norm3 = nn.GroupNorm(num_groups=8, num_channels=512)
+        self.layer1 = ResidualBlock(3, 128, stride=1)  # 32x32
+        self.layer2 = ResidualBlock(128, 256, stride=2)  # 16x16
+        self.layer3 = ResidualBlock(256, 512, stride=2)  # 8x8
 
         self.spatial_attention = LinearAttention(
-            d_q=self.conv3.out_channels,
-            d_kv=self.conv3.out_channels,
+            d_q=512,
+            d_kv=512,
             d_att=512,
             mem_size=64,
         )
@@ -35,9 +52,9 @@ class ModelSharedEncoder(nn.Module):
         self.fc = nn.Linear(512, 1024)
 
     def forward(self, x):
-        x = F.relu(self.norm1(self.conv1(x)))
-        x = F.relu(self.norm2(self.conv2(x)))
-        x = F.relu(self.norm3(self.conv3(x)))
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
 
         # Spatial attention
         b, c, h, w = x.size()
@@ -117,8 +134,7 @@ class Model(nn.Module):
         self.shared_encoder = ModelSharedEncoder()
         self.global_features = ModelGlobalFeatures()
         self.local_features = ModelLocalFeatures()
-        self.gate = AlphaGate(alpha_input=1024,alpha_dim=512, init_alpha=2.0)
-        self.fusion_norm = nn.LayerNorm(normalized_shape=[512])
+        self.gate = AlphaGate(alpha_init=0.0)
         self.fc = nn.Linear(512, 512)
         self.classifier = PrototypeClassifier(embedding_dim=512)
 
@@ -131,9 +147,8 @@ class Model(nn.Module):
         global_feat = self.global_features(shared_rep)
         local_feat = self.local_features(shared_rep)
         # fused_feat = global_feat
-        fused_feat = self.gate(global_feat, local_feat, shared_rep)
-        # fused_feat = self.fusion_norm(fused_feat)
-        fused_feat = F.gelu(self.fc(fused_feat))
+        fused_feat = self.gate(global_feat, local_feat)
+        # fused_feat = F.gelu(self.fc(fused_feat))
         out = self.classifier(fused_feat)
 
         return out, fused_feat, global_feat, local_feat
@@ -141,6 +156,6 @@ class Model(nn.Module):
     def global_forward(self, x):
         shared_rep = self.shared_encoder(x)
         global_feat = self.global_features(shared_rep)
-        fc_feat = self.fc(global_feat)
-        out = self.classifier(fc_feat)
-        return out, fc_feat
+        # fc_feat = F.gelu(self.fc(global_feat))
+        out = self.classifier(global_feat)
+        return out, global_feat

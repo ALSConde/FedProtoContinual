@@ -24,13 +24,13 @@ class PrototypeClassifier(nn.Module):
                           for compatibility with EMA updates.
     """
 
-    def __init__(self, embedding_dim: int):
+    def __init__(self, embedding_dim: int, scale_init: float = 20.0):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.num_classes = 0
 
         self.scale = nn.Parameter(
-            torch.tensor(20.0)
+            torch.tensor(scale_init)
         )  # Learnable scale for sharper softmax distribution, as in cosine classifiers
 
         self.register_buffer(
