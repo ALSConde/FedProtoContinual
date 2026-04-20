@@ -6,6 +6,50 @@ from .layers.LinearAttention import LinearAttention
 from .layers.PrototypeClassifier import PrototypeClassifier
 
 
+class LightweightResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        # Depthwise Separable em vez de Conv padrão
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(
+                in_channels,
+                in_channels,
+                kernel_size=3,
+                stride=stride,
+                padding=1,
+                groups=in_channels,
+            ),
+            nn.Conv2d(in_channels, out_channels, kernel_size=1),
+        )
+        self.norm1 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
+
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=3,
+                padding=1,
+                groups=out_channels,
+            ),
+            nn.Conv2d(out_channels, out_channels, kernel_size=1),
+        )
+        self.norm2 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
+
+        # Shortcut simplificado
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
+                nn.GroupNorm(8, out_channels),
+            )
+
+    def forward(self, x):
+        out = F.relu(self.norm1(self.conv1(x)), inplace=True)
+        out = self.norm2(self.conv2(out))
+        out += self.shortcut(x)
+        return F.relu(out, inplace=True)
+
+
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
@@ -26,10 +70,10 @@ class ResidualBlock(nn.Module):
             )
 
     def forward(self, x):
-        out = F.relu(self.norm1(self.conv1(x)))
+        out = F.relu(self.norm1(self.conv1(x)), inplace=True)
         out = self.norm2(self.conv2(out))
         out += self.shortcut(x)
-        return F.relu(out)
+        return F.relu(out, inplace=True)
 
 
 class ModelSharedEncoder(nn.Module):
@@ -49,7 +93,7 @@ class ModelSharedEncoder(nn.Module):
         self.spatial_norm = nn.GroupNorm(num_groups=8, num_channels=512)
 
         self.pooling = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(512, 1024)
+        self.fc = nn.Linear(512, 512)
 
     def forward(self, x):
         x = self.layer1(x)
@@ -75,21 +119,21 @@ class ModelSharedEncoder(nn.Module):
 class ModelGlobalFeatures(nn.Module):
     def __init__(self):
         super(ModelGlobalFeatures, self).__init__()
-        self.fc1 = nn.Linear(1024, 512)
+        self.fc1 = nn.Linear(512, 512)
         self.fc2 = nn.Linear(512, 512)
 
         self.attention = LinearAttention(
             d_q=self.fc2.out_features,
             d_kv=self.fc1.out_features,
             d_att=512,
-            mem_size=128,
+            mem_size=64,
         )
         self.norm_q = nn.LayerNorm(normalized_shape=[512])
         self.norm_kv = nn.LayerNorm(normalized_shape=[512])
 
     def forward(self, x):
-        h1 = F.relu(self.fc1(x))
-        h2 = F.relu(self.fc2(h1))
+        h1 = F.relu(self.fc1(x), inplace=True)
+        h2 = F.relu(self.fc2(h1), inplace=True)
 
         q = self.norm_q(h2).unsqueeze(1)  # (b, 1, 512)
         k = self.norm_kv(h1).unsqueeze(1)  # (b, 1, 512)
@@ -103,21 +147,21 @@ class ModelGlobalFeatures(nn.Module):
 class ModelLocalFeatures(nn.Module):
     def __init__(self):
         super(ModelLocalFeatures, self).__init__()
-        self.fc1 = nn.Linear(1024, 512)
+        self.fc1 = nn.Linear(512, 512)
         self.fc2 = nn.Linear(512, 512)
 
         self.attention = LinearAttention(
             d_q=self.fc2.out_features,
             d_kv=self.fc1.out_features,
             d_att=512,
-            mem_size=128,
+            mem_size=64,
         )
         self.norm_q = nn.LayerNorm(normalized_shape=[512])
         self.norm_kv = nn.LayerNorm(normalized_shape=[512])
 
     def forward(self, x):
-        h1 = F.relu(self.fc1(x))
-        h2 = F.relu(self.fc2(h1))
+        h1 = F.relu(self.fc1(x), inplace=True)
+        h2 = F.relu(self.fc2(h1), inplace=True)
 
         q = self.norm_q(h2).unsqueeze(1)  # (b, 1, 512)
         k = self.norm_kv(h1).unsqueeze(1)  # (b, 1, 512)
@@ -146,9 +190,7 @@ class Model(nn.Module):
         shared_rep = self.shared_encoder(x)
         global_feat = self.global_features(shared_rep)
         local_feat = self.local_features(shared_rep)
-        # fused_feat = global_feat
         fused_feat = self.gate(global_feat, local_feat)
-        # fused_feat = F.gelu(self.fc(fused_feat))
         out = self.classifier(fused_feat)
 
         return out, fused_feat, global_feat, local_feat
@@ -156,6 +198,5 @@ class Model(nn.Module):
     def global_forward(self, x):
         shared_rep = self.shared_encoder(x)
         global_feat = self.global_features(shared_rep)
-        # fc_feat = F.gelu(self.fc(global_feat))
         out = self.classifier(global_feat)
         return out, global_feat
