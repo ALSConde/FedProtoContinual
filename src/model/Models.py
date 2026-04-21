@@ -177,7 +177,6 @@ class Model(nn.Module):
         self.global_features = ModelGlobalFeatures()
         self.local_features = ModelLocalFeatures()
         self.gate = AlphaGate(alpha_init=0.0)
-        self.fc = nn.Linear(512, 512)
         self.classifier = PrototypeClassifier(embedding_dim=512)
 
         self.classifier.update_from_global(
