@@ -2,6 +2,12 @@ from abc import ABC, abstractmethod
 from typing import Any, Tuple
 
 
+class Clock:
+    epoch = 0
+    iteration = 0
+    total_iterations = 0
+
+
 class Strategy(ABC):
     model = None
     model_old = None
@@ -10,6 +16,9 @@ class Strategy(ABC):
     epochs: int = 1
     optimizer = None
     device = None
+    loss_fn = None
+
+    clock: Clock
 
     loss = None
     mb_x = None
@@ -18,6 +27,7 @@ class Strategy(ABC):
 
     def __init__(self, plugins=None):
         self.plugins = plugins if plugins else []
+        self.clock = Clock()
 
     def _trigger_plugins(self, method_name: str) -> None:
         for plugin in self.plugins:
@@ -38,6 +48,7 @@ class Strategy(ABC):
 
     def after_training_epoch(self) -> None:
         self._trigger_plugins("after_training_epoch")
+        self.clock.epoch += 1
 
     def before_training_iteration(self) -> None:
         self._trigger_plugins("before_training_iteration")
@@ -47,6 +58,8 @@ class Strategy(ABC):
 
     def after_training_iteration(self) -> None:
         self._trigger_plugins("after_training_iteration")
+        self.clock.iteration += 1
+        self.clock.total_iterations += 1
 
     def before_evaluate(self) -> None:
         self._trigger_plugins("before_evaluate")
@@ -63,7 +76,9 @@ class Strategy(ABC):
             for mb_x, mb_y in self.dataset:  # type: ignore
                 self.mb_x = mb_x
                 self.mb_y = mb_y
-                self.mb_x, self.mb_y = self.mb_x.to(self.device), self.mb_y.to(self.device)
+                self.mb_x, self.mb_y = self.mb_x.to(self.device), self.mb_y.to(
+                    self.device
+                )
 
                 self.before_training_iteration()
                 self.mb_output, self.loss = self.forward()

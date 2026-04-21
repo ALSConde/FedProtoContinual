@@ -28,21 +28,19 @@ class LwFPlugin(Plugins):
         self.teacher = None
 
     def before_training(self, strategy) -> None:
-        if strategy.model is None:
-            return
+        if strategy.clock.epoch > 0:
+            self.teacher = copy.deepcopy(strategy.model)
+            self.teacher.eval()
 
-        self.teacher = copy.deepcopy(strategy.model)
-        self.teacher.eval()
+            for param in self.teacher.parameters():
+                param.requires_grad_(False)
 
-        for param in self.teacher.parameters():
-            param.requires_grad_(False)
-
-        device = getattr(strategy, "device", torch.device("cpu"))
-        self.teacher.to(device)
+            device = getattr(strategy, "device", torch.device("cpu"))
+            self.teacher.to(device)
 
     def before_backward(self, strategy) -> None:
 
-        if self.teacher is None:
+        if self.teacher is None and strategy.clock.epoch == 0:
             return
 
         x = strategy.mb_x
@@ -50,10 +48,10 @@ class LwFPlugin(Plugins):
         with torch.no_grad():
             teacher_out = self._teacher_forward(strategy, x)
 
-        student_out = self._student_forward(strategy, x)
+        student_out = strategy.mb_output
 
         distill_loss = self._distillation_loss(student_out, teacher_out)
-        strategy.loss = strategy.loss + self.beta * distill_loss
+        strategy.loss += self.beta * distill_loss
 
     def after_training(self, strategy) -> None:
         self.teacher = None
@@ -87,7 +85,7 @@ class LwFPlugin(Plugins):
             t = F.normalize(teacher_out[0], dim=1) if isinstance(teacher_out, tuple) else F.normalize(teacher_out, dim=1)
         else:
             s = student_out
-            t = teacher_out
+            t = teacher_out[0] if isinstance(teacher_out, tuple) else teacher_out
 
         q = F.softmax(t / T, dim=1)  # target distribution (teacher)
         log_p = F.log_softmax(s / T, dim=1)  # log-distribution of the student
