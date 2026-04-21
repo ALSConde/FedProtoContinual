@@ -1,9 +1,7 @@
 import copy
-
 import torch
 import torch.nn.functional as F
-
-from core.Plugins import Plugins
+from ...core.Plugins import Plugins
 
 
 class LwFPlugin(Plugins):

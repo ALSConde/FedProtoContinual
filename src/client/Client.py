@@ -215,10 +215,10 @@ def _get_first_config(content: RecordDict) -> Dict[str, Any]:
     return dict(cfg)
 
 
-app = ClientApp()
+client_app = ClientApp()
 
 
-@app.train()
+@client_app.train()
 def train(message: Message, context: Context) -> Message:
     client = _get_or_create_client(context)
     content = message.content
@@ -247,7 +247,7 @@ def train(message: Message, context: Context) -> Message:
     return Message(reply, reply_to=message)
 
 
-@app.evaluate()
+@client_app.evaluate()
 def evaluate(message: Message, context: Context) -> Message:
     client = _get_or_create_client(context)
     content = message.content

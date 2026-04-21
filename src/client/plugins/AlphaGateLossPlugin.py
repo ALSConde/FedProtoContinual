@@ -1,5 +1,5 @@
-from core.Plugins import Plugins
-from core.Strategy import Strategy
+from ...core.Plugins import Plugins
+from ...core.Strategy import Strategy
 import torch
 
 
