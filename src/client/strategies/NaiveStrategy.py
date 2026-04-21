@@ -31,7 +31,9 @@ class NaiveStrategy(Strategy):
         self.model.to(self.device)
 
     def forward(self):
-        self.mb_output, self.fused_feat, self.global_feat, self.local_feat = self.model(self.mb_x)
+        self.mb_output, self.fused_feat, self.global_feat, self.local_feat = self.model(
+            self.mb_x
+        )
         loss = self.loss_fn(self.mb_output, self.mb_y)
         return self.mb_output, loss
 
@@ -50,4 +52,5 @@ class NaiveStrategy(Strategy):
 
         avg_loss = total_loss / len(self.data_test.dataset)  # type: ignore
         avg_acc = correct / len(self.data_test.dataset)  # type: ignore
-        return avg_loss, avg_acc
+        self.eval_loss = avg_loss
+        self.eval_acc = avg_acc
