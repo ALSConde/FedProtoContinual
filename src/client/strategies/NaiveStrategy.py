@@ -1,5 +1,5 @@
-from core.Strategy import Strategy
-from model.Models import Model
+from ...core.Strategy import Strategy
+from ...model.Models import Model
 import torch
 
 
