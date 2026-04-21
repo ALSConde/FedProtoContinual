@@ -1,5 +1,5 @@
 from flwr.app import ArrayRecord, ConfigRecord, Context, MetricRecord
-from flwr.serverapp import Grid, ServerApp
+from flwr.serverapp import Grid
 from flwr.serverapp.strategy import Strategy
 import torch
 import torch.nn as nn
