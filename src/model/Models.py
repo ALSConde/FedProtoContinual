@@ -9,7 +9,6 @@ from .layers.PrototypeClassifier import PrototypeClassifier
 class LightweightResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
-        # Depthwise Separable em vez de Conv padrão
         self.conv1 = nn.Sequential(
             nn.Conv2d(
                 in_channels,
@@ -35,7 +34,6 @@ class LightweightResidualBlock(nn.Module):
         )
         self.norm2 = nn.GroupNorm(num_groups=8, num_channels=out_channels)
 
-        # Shortcut simplificado
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
@@ -82,7 +80,7 @@ class ModelSharedEncoder(nn.Module):
 
         self.layer1 = ResidualBlock(3, 128, stride=1)  # 32x32
         self.layer2 = ResidualBlock(128, 256, stride=2)  # 16x16
-        self.layer3 = ResidualBlock(256, 512, stride=2)  # 8x8
+        self.layer3 = LightweightResidualBlock(256, 512, stride=2)  # 8x8
 
         self.spatial_attention = LinearAttention(
             d_q=512,
@@ -195,6 +193,7 @@ class Model(nn.Module):
 
         return out, fused_feat, global_feat, local_feat
 
+    @torch.no_grad()
     def global_forward(self, x):
         shared_rep = self.shared_encoder(x)
         global_feat = self.global_features(shared_rep)
