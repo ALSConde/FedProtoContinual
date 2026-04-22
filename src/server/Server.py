@@ -6,9 +6,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import datetime
 
-from model.Models import Model
-from src.utils.load_centralized_data import load_centralized_data
-from src.utils.test import test
+from ..model.Models import Model
+from ..utils.load_centralized_data import load_centralized_data
+from ..utils.test import test
 
 
 class Server:

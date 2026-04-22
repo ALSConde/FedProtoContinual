@@ -1,8 +1,8 @@
 from flwr.app import Context
 from flwr.serverapp import Grid, ServerApp
-from server.HybridFedAVG import HybridStrategy
-from server.PrototypeAggregator import PrototypeAggregator
-from server.Server import Server
+from .server.HybridFedAVG import HybridStrategy
+from .server.PrototypeAggregator import PrototypeAggregator
+from .server.Server import Server
 
 app = ServerApp()
 

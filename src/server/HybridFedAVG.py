@@ -8,7 +8,7 @@ from flwr.common import Message
 from flwr.serverapp import Grid
 from flwr.serverapp.strategy.fedavg import FedAvg
 
-from server.PrototypeAggregator import PrototypeAggregator
+from .PrototypeAggregator import PrototypeAggregator
 
 
 class HybridStrategy(FedAvg):
