@@ -4,11 +4,12 @@ import torch.nn.functional as F
 
 
 class LinearAttention(nn.Module):
-    def __init__(self, d_q, d_kv, d_att, mem_size=16, eps=1e-6, activation="elu"):
+    def __init__(self, d_q, d_kv, d_att, d_out, mem_size=16, eps=1e-6, activation="elu"):
         super().__init__()
         self.proj_Q = nn.Linear(d_q, d_att)
         self.proj_K = nn.Linear(d_kv, d_att)
         self.proj_V = nn.Linear(d_kv, d_att)
+        self.out_proj = nn.Linear(d_att, d_out)
         self.eps = eps
         self.activation = activation
 
@@ -57,4 +58,5 @@ class LinearAttention(nn.Module):
         # (n, l, d)
         out = torch.einsum("nld,nde,nl->nle", Q, KV, Z)
 
-        return out.contiguous()
+        return self.out_proj(out)
+        
