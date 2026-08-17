@@ -95,7 +95,7 @@ class Adapter(nn.Module):
         assert isinstance(last_stage, WDLayer)
         W = last_stage.weight.data
         b = last_stage.bias.data if last_stage.bias is not None else None
-        d_hat, d_in = w.shape
+        d_hat, d_in = W.shape
 
         max_rank = min(d_hat, d_in)
         rank = (
@@ -106,6 +106,14 @@ class Adapter(nn.Module):
 
         U, S, Vh = torch.linalg.svd(W, full_matrices=False)
         U, S, Vh = U[:, :rank], S[:rank], Vh[:rank, :]
+
+        min_singular = S.min().item()
+        if min_singular < -1e-3:
+            raise RuntimeError(
+                f"Negative singular value encountered during depth expansion: {min_singular}"
+            )
+
+        S = torch.clamp(S, min=0.0)
         sqrt_S = torch.sqrt(S)
         W_a = sqrt_S.unsqueeze(1) * Vh  # (rank, d_in)
         W_b = U * sqrt_S.unsqueeze(0)  # (d_hat, rank)
