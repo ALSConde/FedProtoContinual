@@ -17,9 +17,7 @@ class Adapter(nn.Module):
         super(Adapter, self).__init__()
         self.in_features = in_features
         self.max_bottleneck = (
-            max_bottleneck
-            if max_bottleneck is not None
-            else (in_features + down_features) // 4
+            max_bottleneck if max_bottleneck is not None else down_features * 4
         )
         self.near_identity_eps = near_identity_eps
         self.max_depth = max_depth if max_depth is not None else 3
@@ -27,7 +25,7 @@ class Adapter(nn.Module):
         self.down_stages = nn.ModuleList([WDLayer(in_features, down_features)])
         self.up_proj = WDLayer(down_features, in_features)
 
-        self.width_expansions_since_reduction = 0
+        self.width_expansions_since_reduction: int = 0
 
         layer = self.down_stages[0]
         assert isinstance(layer, WDLayer)
@@ -42,13 +40,14 @@ class Adapter(nn.Module):
     def bottleneck_dim(self) -> int:
         return self.down_stages[-1].out_features
 
-    def forward(self, x):
-        residual = x
+    def forward_delta(self, x) -> torch.Tensor:
         h = x
         for stage in self.down_stages:
             h = F.relu(stage(h))
-        x = self.up_proj(h)
-        return x + residual
+        return self.up_proj(h)
+
+    def forward(self, x):
+        return x + self.forward_delta(x)
 
     # Width expansion logic
     def compute_delta_d(
@@ -113,7 +112,9 @@ class Adapter(nn.Module):
                 f"Negative singular value encountered during depth expansion: {min_singular}"
             )
 
-        S = torch.clamp(S, min=0.0)
+        S = torch.clamp(
+            S, min=1e-4
+        )  # Avoid numerical issues with very small singular values
         sqrt_S = torch.sqrt(S)
         W_a = sqrt_S.unsqueeze(1) * Vh  # (rank, d_in)
         W_b = U * sqrt_S.unsqueeze(0)  # (d_hat, rank)

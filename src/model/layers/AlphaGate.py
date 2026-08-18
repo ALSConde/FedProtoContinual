@@ -4,10 +4,10 @@ import torch.nn.functional as F
 
 
 class AlphaGate(nn.Module):
-    def __init__(self, alpha_init=0.0):
+    def __init__(self, embedding_dim: int=512, alpha_init=0.0):
         super().__init__()
-
-        self.beta = nn.Parameter(torch.full((512,), alpha_init))
+        self.embedding_dim = embedding_dim
+        self.beta = nn.Parameter(torch.full((embedding_dim,), alpha_init))
 
     def forward(self, global_features, local_features):
         self.alpha = torch.sigmoid(self.beta) / 2

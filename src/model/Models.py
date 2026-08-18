@@ -5,18 +5,21 @@ from .layers.AlphaGate import AlphaGate
 from .layers.LinearAttention import LinearAttention
 from .layers.PrototypeClassifier import PrototypeClassifier
 from .layers.MultiHeadLinearAttention import MultiHeadLinearAttention
+from .blocks.Adapter import Adapter
 
 
 class LinearTransformerBlock(nn.Module):
-    def __init__(self, dim, heads=8, mlp_ratio=2., activation="elu", mem_size=64):
+    def __init__(
+        self, dim, norm_dim, heads=8, mlp_ratio=2.0, activation="elu", mem_size=64
+    ):
         super().__init__()
         self.activation = activation
 
-        self.norm1 = nn.LayerNorm(dim)
+        self.norm1 = nn.LayerNorm(norm_dim)
         self.attn = MultiHeadLinearAttention(
             embed_dim=dim, num_heads=heads, activation=activation, mem_size=mem_size
         )
-        self.norm2 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(norm_dim)
 
         internal_dim = int(dim * mlp_ratio)
 
@@ -102,6 +105,7 @@ class ResidualBlock(nn.Module):
         out += self.shortcut(x)
         return F.relu(out, inplace=True)
 
+
 class ModelSharedEncoder2(nn.Module):
     def __init__(self, depth=2, heads=2):
         super().__init__()
@@ -111,13 +115,19 @@ class ModelSharedEncoder2(nn.Module):
 
         self.blocks = nn.ModuleList(
             [
-                LinearTransformerBlock(dim=512, heads=heads, mlp_ratio=0.5, activation="relu", mem_size=64)
+                LinearTransformerBlock(
+                    dim=512,
+                    norm_dim=[64, 512],
+                    heads=heads,
+                    mlp_ratio=0.5,
+                    activation="relu",
+                    mem_size=64,
+                )
                 for _ in range(depth)
             ]
         )
 
-        self.norm = nn.LayerNorm(512)
-        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.norm = nn.LayerNorm([64, 512])
         self.fc = nn.Linear(512, 512)
 
     def forward(self, x):
@@ -128,11 +138,11 @@ class ModelSharedEncoder2(nn.Module):
         b, c, h, w = x.shape
         # (B, C, H, W) → (B, N, C)
         x = x.view(b, c, h * w).transpose(1, 2)
-  
+
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
-        x = x.mean(dim=1)
+        # x = x.mean(dim=1)
         x = F.gelu(self.fc(x))
         return x
 
@@ -149,6 +159,7 @@ class ModelSharedEncoder(nn.Module):
             d_q=512,
             d_kv=512,
             d_att=512,
+            d_out=512,
             mem_size=64,
         )
         self.spatial_norm = nn.GroupNorm(num_groups=8, num_channels=512)
@@ -180,27 +191,27 @@ class ModelSharedEncoder(nn.Module):
 class ModelGlobalFeatures(nn.Module):
     def __init__(self):
         super(ModelGlobalFeatures, self).__init__()
-        self.fc1 = nn.Linear(512, 512)
-        self.fc2 = nn.Linear(512, 512)
+        self.global_adapter = Adapter(in_features=512, down_features=128)
 
         self.attention = LinearAttention(
-            d_q=self.fc2.out_features,
-            d_kv=self.fc1.out_features,
-            d_att=512,
+            d_q=self.global_adapter.up_proj.out_features,
+            d_kv=self.global_adapter.up_proj.out_features,
+            d_att=128,
+            d_out=512,
             mem_size=64,
         )
         self.norm_q = nn.LayerNorm(normalized_shape=[512])
         self.norm_kv = nn.LayerNorm(normalized_shape=[512])
 
     def forward(self, x):
-        h1 = F.relu(self.fc1(x), inplace=True)
-        h2 = F.relu(self.fc2(h1), inplace=True)
 
-        q = self.norm_q(h2).unsqueeze(1)  # (b, 1, 512)
-        k = self.norm_kv(h1).unsqueeze(1)  # (b, 1, 512)
+        q = self.norm_q(x).unsqueeze(1)  # (b, 1, 512)
+        k = self.norm_kv(x).unsqueeze(1)  # (b, 1, 512)
         v = k
         h_attn = self.attention(q, k, v).squeeze(1)  # (b, 512)
-        x = h2 + h_attn
+        x = x + h_attn
+
+        x = x + F.relu(self.global_adapter(x))
 
         return x
 
@@ -208,27 +219,72 @@ class ModelGlobalFeatures(nn.Module):
 class ModelLocalFeatures(nn.Module):
     def __init__(self):
         super(ModelLocalFeatures, self).__init__()
-        self.fc1 = nn.Linear(512, 128)
-        self.fc2 = nn.Linear(128, 512)
+        self.global_adapter = Adapter(in_features=512, down_features=128)
 
         self.attention = LinearAttention(
-            d_q=self.fc2.out_features,
-            d_kv=self.fc1.out_features,
-            d_att=512,
+            d_q=self.global_adapter.up_proj.out_features,
+            d_kv=self.global_adapter.up_proj.out_features,
+            d_att=128,
+            d_out=512,
             mem_size=64,
         )
         self.norm_q = nn.LayerNorm(normalized_shape=[512])
-        self.norm_kv = nn.LayerNorm(normalized_shape=[128])
+        self.norm_kv = nn.LayerNorm(normalized_shape=[512])
 
     def forward(self, x):
-        h1 = F.relu(self.fc1(x), inplace=True)
-        h2 = F.relu(self.fc2(h1), inplace=True)
-
-        q = self.norm_q(h2).unsqueeze(1)  # (b, 1, 512)
-        k = self.norm_kv(h1).unsqueeze(1)  # (b, 1, 128)
+        q = self.norm_q(x).unsqueeze(1)  # (b, 1, 512)
+        k = self.norm_kv(x).unsqueeze(1)  # (b, 1, 512)
         v = k
         h_attn = self.attention(q, k, v).squeeze(1)  # (b, 512)
-        x = h2 + h_attn
+        x = x + h_attn
+
+        x = x + F.relu(self.global_adapter(x))
+
+        return x
+
+
+class ModelGlobalFeatures2(nn.Module):
+    def __init__(self):
+        super(ModelGlobalFeatures2, self).__init__()
+        self.global_adapter = Adapter(in_features=512, down_features=128)
+
+        self.attention = MultiHeadLinearAttention(
+            embed_dim=512,
+            num_heads=2,
+            activation="relu",
+            mem_size=64,
+        )
+        self.norm = nn.LayerNorm(normalized_shape=[64, 512])
+
+    def forward(self, x):
+        x = self.norm(x)  # (b, 64, 512)
+        h_attn = self.attention(x)  # (b, 64, 512)
+        x = x + h_attn
+
+        x = x + F.relu(self.global_adapter(x))
+
+        return x
+
+
+class ModelLocalFeatures2(nn.Module):
+    def __init__(self):
+        super(ModelLocalFeatures2, self).__init__()
+        self.global_adapter = Adapter(in_features=512, down_features=128)
+
+        self.attention = MultiHeadLinearAttention(
+            embed_dim=512,
+            num_heads=2,
+            activation="relu",
+            mem_size=64,
+        )
+        self.norm = nn.LayerNorm(normalized_shape=[64, 512])
+
+    def forward(self, x):
+        x = self.norm(x)  # (b, 64, 512)
+        h_attn = self.attention(x)  # (b, 64, 512)
+        x = x + h_attn
+
+        x = x + F.relu(self.global_adapter(x))
 
         return x
 
@@ -236,15 +292,14 @@ class ModelLocalFeatures(nn.Module):
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
-        # self.shared_encoder = ModelSharedEncoder2(depth=1, heads=2)
         self.shared_encoder = ModelSharedEncoder()
-        # self.shared_encoder = ViTSharedEncoder(depth=2, heads=2)
         self.global_features = ModelGlobalFeatures()
         self.local_features = ModelLocalFeatures()
-        # self.gate = AlphaGate(alpha_init=0.0)
-        self.fc = nn.Linear(512, 512)
+        # self.shared_encoder = ModelSharedEncoder2(depth=1, heads=2)
+        # self.global_features = ModelGlobalFeatures2()
+        # self.local_features = ModelLocalFeatures2()
+        self.gate = AlphaGate(alpha_init=0.0)
         self.classifier = PrototypeClassifier(embedding_dim=512)
-
         self.classifier.update_from_global(
             mu_global=torch.rand(10, 512), class_ids=torch.arange(10)
         )
@@ -253,9 +308,10 @@ class Model(nn.Module):
         shared_rep = self.shared_encoder(x)
         global_feat = self.global_features(shared_rep)
         local_feat = self.local_features(global_feat)
-        # fused_feat = self.gate(global_feat, local_feat)
-        fused_feat = global_feat + local_feat
+        fused_feat = self.gate(global_feat, local_feat)
+        # fused_feat = global_feat + local_feat
         out = self.classifier(fused_feat)
+        # out = self.classifier(fused_feat.mean(dim=1))
 
         return out, fused_feat, global_feat, local_feat
 
@@ -264,4 +320,5 @@ class Model(nn.Module):
         shared_rep = self.shared_encoder(x)
         global_feat = self.global_features(shared_rep)
         out = self.classifier(global_feat)
+        # out = self.classifier(global_feat.mean(dim=1))
         return out, global_feat
