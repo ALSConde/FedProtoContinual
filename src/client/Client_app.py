@@ -10,20 +10,25 @@ from flwr.app import (
 )
 from flwr.clientapp import ClientApp
 import torch
-import torch.nn as nn
-
+from src.model.Models import FCLModel
 from src.model.layers.PrototypeMemory import PrototypeMemory
-from .ClientTask import load_data, train_fn, test_fn
+from .ClientTask import train_fn, test_fn
+from ..utils.utd_mahd_dataset import load_data
 
 app = ClientApp()
 
 
-def _build_model(context: Context) -> nn.Module:
-    some_model = nn.Module()
-    return some_model
+def _build_model(context: Context) -> FCLModel:
+    input_dim = int(context.run_config["input-dim"])
+    return FCLModel(
+        input_dim=input_dim,
+        hidden_dim=int(context.run_config["hidden-dim"]),
+        d_hat_global=int(context.run_config["d-hat-global"]),
+        d_hat_local=int(context.run_config["d-hat-local"]),
+    )
 
 
-def _load_global_prototypes(model: nn.Module, config: ConfigRecord) -> None:
+def _load_global_prototypes(model: FCLModel, config: ConfigRecord) -> None:
     if "global_prototypes" in config:
         mu_global, class_ids = pickle.loads(config["global_prototypes"])
         model.classifier.update_from_global(mu_global, class_ids)
@@ -42,8 +47,10 @@ def train(msg: Message, context: Context) -> Message:
     train_loader, _, _ = load_data(
         partition_id,
         num_partitions,
-        input_dim=int(context.run_config["input-dim"]),
-        num_classes_total=int(context.run_config["num-classes-total"]),
+        root=str(context.run_config["data-root"]),
+        window_size=int(context.run_config["window-size"]),
+        stride=int(context.run_config["stride"]),
+        dirichlet_alpha=float(context.run_config["dirichlet-alpha"]),
         batch_size=int(context.run_config["batch-size"]),
     )
 
@@ -96,8 +103,10 @@ def evaluate(msg: Message, context: Context) -> Message:
     _, valloader, _ = load_data(
         partition_id,
         num_partitions,
-        input_dim=int(context.run_config["input-dim"]),
-        num_classes_total=int(context.run_config["num-classes-total"]),
+        root=str(context.run_config["data-root"]),
+        window_size=int(context.run_config["window-size"]),
+        stride=int(context.run_config["stride"]),
+        dirichlet_alpha=float(context.run_config["dirichlet-alpha"]),
         batch_size=int(context.run_config["batch-size"]),
     )
 
