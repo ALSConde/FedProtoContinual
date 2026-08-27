@@ -104,7 +104,7 @@ class UTDMAHDInertial(Dataset):
 
     def __getitem__(self, idx: int):
         window, label, _ = self.windows[idx]
-        x = torch.from_numpy(window)
+        x = torch.from_numpy(window.T).contiguous()  # Shape: (C, T)
         return x, label
 
     @property

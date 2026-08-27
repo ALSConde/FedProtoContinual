@@ -94,8 +94,8 @@ class FeatureExtractor(nn.Module):
         x = x.permute(
             0, 2, 1
         )  # Change shape to (batch_size, seq_len, features) for LSTM
-        output, _ = self.lstm(x)
-        return output
+        _, (h_n, _) = self.lstm(x)
+        return h_n[-1]
 
 
 class FCLModel(nn.Module):
