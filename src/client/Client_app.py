@@ -40,7 +40,10 @@ def train(msg: Message, context: Context) -> Message:
 
     model = _build_model(context)
     model.set_global_arrays(msg.content["arrays"].to_torch_state_dict())
-    _load_global_prototypes(model, msg.content["config"])
+    prototypes_updated = False
+    if "global_prototypes" in msg.content["config"]:
+        prototypes_updated = True
+        _load_global_prototypes(model, msg.content["config"])
 
     partition_id = int(context.node_config["partition-id"])
     num_partitions = int(context.node_config["num-partitions"])
@@ -74,7 +77,7 @@ def train(msg: Message, context: Context) -> Message:
 
     arrays_reply = ArrayRecord(model.get_global_arrays())
     metrics_reply = MetricRecord(
-        {"train_loss": train_loss, "num-examples": len(train_loader.dataset)}
+        {"train_loss": train_loss, "num-examples": len(train_loader.dataset), "prototypes_updated": prototypes_updated}
     )
     config_reply = ConfigRecord(
         {"proto_stats": pickle.dumps((sum_h, counts, class_ids))}
