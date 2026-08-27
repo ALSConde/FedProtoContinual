@@ -40,10 +40,7 @@ def train(msg: Message, context: Context) -> Message:
 
     model = _build_model(context)
     model.set_global_arrays(msg.content["arrays"].to_torch_state_dict())
-    prototypes_updated = False
-    if "global_prototypes" in msg.content["config"]:
-        prototypes_updated = True
-        _load_global_prototypes(model, msg.content["config"])
+    _load_global_prototypes(model, msg.content["config"])
 
     partition_id = int(context.node_config["partition-id"])
     num_partitions = int(context.node_config["num-partitions"])
