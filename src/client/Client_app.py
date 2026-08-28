@@ -68,7 +68,7 @@ def train(msg: Message, context: Context) -> Message:
     model.set_global_arrays(msg.content["arrays"].to_torch_state_dict())
 
     known_consolidated = _load_local_state(context, model)
-    _load_global_prototypes(model, msg.content["config"], known_consolidated)
+    _load_global_prototypes(model, msg.content["config"], known_consolidated=known_consolidated)
 
     partition_id = int(context.node_config["partition-id"])
     num_partitions = int(context.node_config["num-partitions"])
@@ -115,7 +115,7 @@ def train(msg: Message, context: Context) -> Message:
 
     arrays_reply = ArrayRecord(model.get_global_arrays())
     metrics_reply = MetricRecord(
-        {"train_loss": train_loss, "num-examples": len(train_loader.dataset), "prototypes_updated": prototypes_updated}
+        {"train_loss": train_loss, "num-examples": len(train_loader.dataset)}
     )
     config_reply = ConfigRecord(
         {"proto_stats": pickle.dumps((sum_h, counts, class_ids))}
@@ -137,7 +137,9 @@ def evaluate(msg: Message, context: Context) -> Message:
 
     model = _build_model(context)
     model.set_global_arrays(msg.content["arrays"].to_torch_state_dict())
-    _load_global_prototypes(model, msg.content["config"])
+
+    known_consolidated = _load_local_state(context, model)
+    _load_global_prototypes(model, msg.content["config"], known_consolidated=known_consolidated)
 
     partition_id = int(context.node_config["partition-id"])
     num_partitions = int(context.node_config["num-partitions"])
