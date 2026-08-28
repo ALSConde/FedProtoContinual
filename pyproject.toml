@@ -26,10 +26,10 @@ serverapp = "src.server.Server_app:app"
 clientapp = "src.client.Client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 3
+num-server-rounds = 10
 fraction-evaluate = 1.0
-local-epochs = 1
-learning-rate = 0.01
+local-epochs = 5
+learning-rate = 0.001
 input-dim = 6
 batch-size = 16
 hidden-dim = 64
@@ -39,6 +39,7 @@ data-root = "./storage/utd_mhad"
 window-size = 60
 stride = 30
 dirichlet-alpha = 0.5
+theta-exp=0.3
 
 [superlink]
 default = "local"
