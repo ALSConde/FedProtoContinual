@@ -1,8 +1,9 @@
+from typing import Optional, Union
 import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, random_split, DataLoader
 import torch.nn.functional as F
-
+from src.model.Models import FCLModel
 from src.model.layers.PrototypeMemory import PrototypeMemory
 
 
@@ -101,3 +102,54 @@ def test_fn(model: nn.Module, valloader: DataLoader, device: torch.device):
     if total == 0:
         return 0.0, 0.0
     return loss_sum / max(n_batches, 1), correct / total
+
+def compute_expansion_signal(model: FCLModel, loader: DataLoader, known_consolidated: set, scale: Union[float, torch.Tensor], device: torch.device) -> Optional[dict]:
+    model.eval()
+    h_cons_list, y_cons_list = [], []
+    h_new_list, y_new_list = [], []
+
+    with torch.no_grad():
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            h = model.embed(x)
+            cons_mask = torch.tensor([int(label) in known_consolidated for label in y.tolist()], device=device)
+            if cons_mask.any():
+                h_cons_list.append(h[cons_mask])
+                y_cons_list.append(y[cons_mask])
+            if (~cons_mask).any():
+                h_new_list.append(h[~cons_mask])
+                y_new_list.append(y[~cons_mask])
+
+        if not h_cons_list or not h_new_list:
+            return None
+
+        h_cons = torch.cat(h_cons_list) if h_cons_list else None
+        y_cons = torch.cat(y_cons_list) if y_cons_list else None
+        proto_cons = model.classifier.prototypes[y_cons] if y_cons is not None and len(y_cons) > 0 else None
+
+        h_new = torch.cat(h_new_list) if h_new_list else None
+        y_new = torch.cat(y_new_list) if y_new_list else None
+        proto_new = None
+
+        if h_new is not None and len(h_new) > 0:
+            h_new_norm = F.normalize(h_new, dim=1)
+            proto_new = torch.zeros_like(h_new)
+            for c in y_new.unique():
+                mask = y_new == c
+                proto_new[mask] = h_new_norm[mask].mean(dim=0, keepdim=True)
+
+        logits, labels_for_ce = None, None
+        if h_cons is not None and len(h_cons) > 0 and model.classifier.num_classes > 1:
+            logits = model.classifier(h_cons)
+            labels_for_ce = y_cons
+
+        return {
+            "h_cons": h_cons,
+            "proto_cons": proto_cons,
+            "h_new": h_new,
+            "proto_new": proto_new,
+            "logits": logits,
+            "labels": labels_for_ce,
+            "scale": scale,
+            "num_seen_classes": max(model.classifier.num_classes, 1)
+        }
