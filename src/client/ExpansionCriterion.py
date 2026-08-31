@@ -82,8 +82,7 @@ class ExpansionCriterion:
             redistribute = missing_weight / len(available)
             for k in available:
                 weights[k] += redistribute
-
-        g = sum(weights[k] for k in available)
+        g = sum(weights[k] * terms[k] for k in available)
 
         return {
             "g": g,

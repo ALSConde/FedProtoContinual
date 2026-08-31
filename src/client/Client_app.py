@@ -14,7 +14,7 @@ from src.client.ExpansionCriterion import ExpansionCriterion
 from src.model.Models import FCLModel
 from src.model.layers.PrototypeMemory import PrototypeMemory
 from .ClientTask import train_fn, test_fn, compute_expansion_signal
-from ..utils.utd_mahd_dataset import load_data
+from ..utils.utd_mahd_dataset import load_data, resolve_classes_per_step, resolve_dirichlet_mode
 
 app = ClientApp()
 
@@ -70,6 +70,40 @@ def _load_global_prototypes(
         known_consolidated.update([int(c) for c in class_ids.tolist()])
 
 
+def _load_client_data(msg: Message, context: Context):
+    partition_id = int(context.node_config["partition-id"])
+    num_partitions = int(context.node_config["num-partitions"])
+
+    current_round = int(msg.content["config"].get("server_round", 1))
+
+    scenario = str(context.run_config.get("training-scenario", "federated")).lower()
+    raw_classes_per_step = context.run_config.get("classes-per-step", None)
+    if raw_classes_per_step is not None:
+        raw_classes_per_step = int(raw_classes_per_step)
+    classes_per_step = resolve_classes_per_step(scenario, raw_classes_per_step)
+
+    raw_dirichlet_mode = str(context.run_config.get("dirichlet-mode", "static")).lower()
+    dirichlet_mode = resolve_dirichlet_mode(scenario, raw_dirichlet_mode)
+
+    return load_data(
+        partition_id,
+        num_partitions,
+        root=str(context.run_config["data-root"]),
+        window_size=int(context.run_config["window-size"]),
+        stride=int(context.run_config["stride"]),
+        dirichlet_alpha=float(context.run_config["dirichlet-alpha"]),
+        batch_size=int(context.run_config["batch-size"]),
+        current_round=current_round,
+        classes_per_step=classes_per_step,
+        rounds_per_step=int(context.run_config.get("rounds-per-step", 1)),
+        num_classes_total=(
+            int(context.run_config["num-classes-total"])
+            if "num-classes-total" in context.run_config
+            else None
+        ),
+        dirichlet_mode=dirichlet_mode
+    ), partition_id
+
 @app.train()
 def train(msg: Message, context: Context) -> Message:
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -82,18 +116,23 @@ def train(msg: Message, context: Context) -> Message:
         model, msg.content["config"], known_consolidated=known_consolidated
     )
 
-    partition_id = int(context.node_config["partition-id"])
-    num_partitions = int(context.node_config["num-partitions"])
-    train_loader, _, _ = load_data(
-        partition_id,
-        num_partitions,
-        root=str(context.run_config["data-root"]),
-        window_size=int(context.run_config["window-size"]),
-        stride=int(context.run_config["stride"]),
-        dirichlet_alpha=float(context.run_config["dirichlet-alpha"]),
-        batch_size=int(context.run_config["batch-size"]),
-    )
+    (train_loader, _, _), partition_id = _load_client_data(msg, context)
 
+    if len(train_loader.dataset) == 0:
+        arrays_reply = ArrayRecord(model.get_global_arrays())
+        metrics_reply = MetricRecord({"train_loss": 0.0, "num-examples": 0})
+        config_reply = ConfigRecord({"proto_stats": pickle.dumps((None, None, []))})
+
+        content = RecordDict(
+            {
+                "arrays": arrays_reply,
+                "metrics": metrics_reply,
+                "config": config_reply,
+            }
+        )
+
+        return Message(content=content, reply_to=msg)
+    
     if model.classifier.num_classes > 0:
         signal = compute_expansion_signal(
             model,
@@ -165,17 +204,14 @@ def evaluate(msg: Message, context: Context) -> Message:
         model, msg.content["config"], known_consolidated=known_consolidated
     )
 
-    partition_id = int(context.node_config["partition-id"])
-    num_partitions = int(context.node_config["num-partitions"])
-    _, valloader, _ = load_data(
-        partition_id,
-        num_partitions,
-        root=str(context.run_config["data-root"]),
-        window_size=int(context.run_config["window-size"]),
-        stride=int(context.run_config["stride"]),
-        dirichlet_alpha=float(context.run_config["dirichlet-alpha"]),
-        batch_size=int(context.run_config["batch-size"]),
-    )
+    (_, valloader, _), _ = _load_client_data(msg, context)
+
+    if len(valloader.dataset) == 0:
+        metrics_reply = MetricRecord(
+            {"eval_loss": 0.0, "eval_acc": 0.0, "num-examples": 0}
+        )
+        content = RecordDict({"metrics": metrics_reply})
+        return Message(content=content, reply_to=msg)
 
     eval_loss, eval_acc = test_fn(model, valloader, device)
 

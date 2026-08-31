@@ -38,8 +38,13 @@ d-hat-local = 8
 data-root = "./storage/utd_mhad"
 window-size = 60
 stride = 30
-dirichlet-alpha = 0.5
+dirichlet-alpha = 0.1
 theta-exp=0.3
+training-scenario = "class-incremental"
+dirichlet-mode = "static"
+num-classes = 27
+classes-per-step = 6
+rounds-per-step = 2
 
 [superlink]
 default = "local"
@@ -49,6 +54,6 @@ address = "127.0.0.1:9093"
 insecure = true
 
 [superlink.local-custom-resources]
-options.num-supernodes = 4
+options.num-supernodes = 10
 options.backend.client-resources.num-cpus = 1 # each ClientApp assumes to use 1 CPU (default is 2)
 options.backend.client-resources.num-gpus = 0.25 # each ClientApp uses 25% of VRAM (default is 0.0)

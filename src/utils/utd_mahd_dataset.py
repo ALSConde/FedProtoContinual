@@ -13,6 +13,14 @@ NUM_TRAILS = 4
 INPUT_CHANNELS = 6
 SAMPLING_RATE_HZ = 50
 
+SCENARIO_FEDERATED = "federated"
+SCENARIO_CLASS_INCREMENTAL = "class-incremental"
+VALID_TRAINING_SCENARIOS = (SCENARIO_FEDERATED, SCENARIO_CLASS_INCREMENTAL)
+
+DIRICHLET_STATIC = "static"
+DIRICHLET_DYNAMIC = "dynamic"
+VALID_DIRICHLET_MODES = (DIRICHLET_STATIC, DIRICHLET_DYNAMIC)
+
 _INERTIAL_FILENAME_RE = re.compile(
     r"a(?P<action>\d{1,2})_s(?P<subject>\d{1,2})_t(?P<trial>\d{1,2})_inertial",
     re.IGNORECASE,
@@ -115,6 +123,54 @@ class UTDMAHDInertial(Dataset):
         return np.array([s for _, _, s in self.windows])
 
 
+def resolve_classes_per_step(scenario: str, classes_per_step: Optional[int]) -> Optional[int]:
+    if scenario not in VALID_TRAINING_SCENARIOS:
+        raise ValueError(
+            f"Unknown training scenario '{scenario}'."
+            f"Expected one of: {VALID_TRAINING_SCENARIOS}"
+        )
+
+    if scenario == SCENARIO_FEDERATED:
+        return None
+
+    if not classes_per_step:
+        raise ValueError(
+            "training-scenario is 'class-incremental', but classes-per-step "
+            "was not set (or is 0) in pyproject.toml."
+        )
+
+    return int(classes_per_step)
+
+def resolve_dirichlet_mode(scenario: str, dirichlet_mode: str) -> str:
+    if dirichlet_mode not in VALID_DIRICHLET_MODES:
+        raise ValueError(
+            f"Unknown dirichlet-mode '{dirichlet_mode}'. "
+            f"Expected one of {VALID_DIRICHLET_MODES}"
+        )
+
+    if scenario == SCENARIO_CLASS_INCREMENTAL:
+        return DIRICHLET_STATIC
+
+    return dirichlet_mode
+
+def build_class_schedule(num_classes_total: int, classes_per_step: int) -> list[list[int]]:
+    if classes_per_step <= 0:
+        raise ValueError("classes_per_step must be a positive integer.")
+    return [
+        list(range(start, min(start + classes_per_step, num_classes_total))) for start in range(0, num_classes_total, classes_per_step)
+        ]
+
+def classes_seen_until_round(current_round: int, rounds_per_step:int, schedule: list[list[int]]) -> set[int]:
+    if rounds_per_step <= 0:
+        raise ValueError("rounds_per_step must be a positive integer.")
+    step_idx = (max(current_round, 1) - 1) // rounds_per_step
+    step_idx = min(step_idx, len(schedule) - 1)
+
+    seen : set[int] = set()
+    for step_classes in schedule[: step_idx + 1]:
+        seen.update(step_classes)
+    return seen
+
 def dirichlet_partition(
     labels: np.ndarray, num_clients: int, alpha: float, seed: int = 0
 ) -> list[np.ndarray]:
@@ -148,13 +204,43 @@ def load_data(
     val_fraction: float = 0.2,
     batch_size: int = 16,
     seed: int = 0,
+    current_round: int = 1,
+    classes_per_step: Optional[int] = None,
+    rounds_per_step: int = 1,
+    num_classes_total: Optional[int] = None,
+    dirichlet_mode: str = DIRICHLET_STATIC,
 ):
+
+    if dirichlet_mode not in VALID_DIRICHLET_MODES:
+        raise ValueError(
+            f"Unknown dirichlet-mode '{dirichlet_mode}'. "
+            f"Expected one of {VALID_DIRICHLET_MODES}."
+        )
+
     dataset = _get_cached_dataset(root, window_size, stride)
+
+    partition_seed = (seed + current_round if dirichlet_mode == DIRICHLET_DYNAMIC else seed)
+
     partitions = dirichlet_partition(
-        dataset.labels, num_partitions, dirichlet_alpha, seed
+        dataset.labels, num_partitions, dirichlet_alpha, partition_seed
     )
     client_indices = partitions[partition_id]
-    rng = np.random.RandomState(seed)
+
+    if classes_per_step is not None:
+        total_classes = (num_classes_total
+                         if num_classes_total is not None
+                         else int(dataset.labels.max()) + 1)
+        schedule = build_class_schedule(total_classes, classes_per_step)
+        allowed_classes = classes_seen_until_round(current_round, rounds_per_step, schedule)
+        labels_for_client = dataset.labels[client_indices]
+        mask = np.isin(labels_for_client, list(allowed_classes))
+        client_indices = client_indices[mask]
+
+        if len(client_indices) == 0:
+            empty_loader = DataLoader(Subset(dataset, []), batch_size=batch_size)
+            return empty_loader, empty_loader, []
+
+    rng = np.random.RandomState(partition_seed)
     rng.shuffle(client_indices)
     n_val = int(val_fraction * len(client_indices))
     val_idx, train_idx = client_indices[:n_val], client_indices[n_val:]
