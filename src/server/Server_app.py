@@ -4,7 +4,10 @@ from matplotlib.pylab import dirichlet
 import torch
 from src.model.Models import FCLModel
 from src.server.FedAvgStrategy import FedAvgStrategy
-from src.utils.utd_mahd_dataset import INPUT_CHANNELS, resolve_classes_per_step, resolve_dirichlet_mode
+from src.utils.utd_mahd_dataset import (
+    resolve_classes_per_step,
+    resolve_dirichlet_mode,
+)
 
 app = ServerApp()
 
@@ -21,7 +24,9 @@ def main(grid: Grid, context: Context) -> None:
     if class_scen is not None:
         class_scen = int(class_scen)
     classes_per_step = resolve_classes_per_step(scenario, class_scen)
-    dirichlet_mode = resolve_dirichlet_mode(scenario, str(context.run_config.get("dirichlet-mode", "static")).lower())
+    dirichlet_mode = resolve_dirichlet_mode(
+        scenario, str(context.run_config.get("dirichlet-mode", "static")).lower()
+    )
 
     if classes_per_step is not None:
         rounds_per_step = int(context.run_config.get("rounds-per-step", 1))

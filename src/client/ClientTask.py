@@ -103,7 +103,14 @@ def test_fn(model: nn.Module, valloader: DataLoader, device: torch.device):
         return 0.0, 0.0
     return loss_sum / max(n_batches, 1), correct / total
 
-def compute_expansion_signal(model: FCLModel, loader: DataLoader, known_consolidated: set, scale: Union[float, torch.Tensor], device: torch.device) -> Optional[dict]:
+
+def compute_expansion_signal(
+    model: FCLModel,
+    loader: DataLoader,
+    known_consolidated: set,
+    scale: Union[float, torch.Tensor],
+    device: torch.device,
+) -> Optional[dict]:
     model.eval()
     h_cons_list, y_cons_list = [], []
     h_new_list, y_new_list = [], []
@@ -112,7 +119,10 @@ def compute_expansion_signal(model: FCLModel, loader: DataLoader, known_consolid
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             h = model.embed(x)
-            cons_mask = torch.tensor([int(label) in known_consolidated for label in y.tolist()], device=device)
+            cons_mask = torch.tensor(
+                [int(label) in known_consolidated for label in y.tolist()],
+                device=device,
+            )
             if cons_mask.any():
                 h_cons_list.append(h[cons_mask])
                 y_cons_list.append(y[cons_mask])
@@ -125,7 +135,11 @@ def compute_expansion_signal(model: FCLModel, loader: DataLoader, known_consolid
 
         h_cons = torch.cat(h_cons_list) if h_cons_list else None
         y_cons = torch.cat(y_cons_list) if y_cons_list else None
-        proto_cons = model.classifier.prototypes[y_cons] if y_cons is not None and len(y_cons) > 0 else None
+        proto_cons = (
+            model.classifier.prototypes[y_cons]
+            if y_cons is not None and len(y_cons) > 0
+            else None
+        )
 
         h_new = torch.cat(h_new_list) if h_new_list else None
         y_new = torch.cat(y_new_list) if y_new_list else None
@@ -151,5 +165,5 @@ def compute_expansion_signal(model: FCLModel, loader: DataLoader, known_consolid
             "logits": logits,
             "labels": labels_for_ce,
             "scale": scale,
-            "num_seen_classes": max(model.classifier.num_classes, 1)
+            "num_seen_classes": max(model.classifier.num_classes, 1),
         }

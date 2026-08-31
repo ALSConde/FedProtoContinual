@@ -123,7 +123,9 @@ class UTDMAHDInertial(Dataset):
         return np.array([s for _, _, s in self.windows])
 
 
-def resolve_classes_per_step(scenario: str, classes_per_step: Optional[int]) -> Optional[int]:
+def resolve_classes_per_step(
+    scenario: str, classes_per_step: Optional[int]
+) -> Optional[int]:
     if scenario not in VALID_TRAINING_SCENARIOS:
         raise ValueError(
             f"Unknown training scenario '{scenario}'."
@@ -141,6 +143,7 @@ def resolve_classes_per_step(scenario: str, classes_per_step: Optional[int]) -> 
 
     return int(classes_per_step)
 
+
 def resolve_dirichlet_mode(scenario: str, dirichlet_mode: str) -> str:
     if dirichlet_mode not in VALID_DIRICHLET_MODES:
         raise ValueError(
@@ -153,23 +156,31 @@ def resolve_dirichlet_mode(scenario: str, dirichlet_mode: str) -> str:
 
     return dirichlet_mode
 
-def build_class_schedule(num_classes_total: int, classes_per_step: int) -> list[list[int]]:
+
+def build_class_schedule(
+    num_classes_total: int, classes_per_step: int
+) -> list[list[int]]:
     if classes_per_step <= 0:
         raise ValueError("classes_per_step must be a positive integer.")
     return [
-        list(range(start, min(start + classes_per_step, num_classes_total))) for start in range(0, num_classes_total, classes_per_step)
-        ]
+        list(range(start, min(start + classes_per_step, num_classes_total)))
+        for start in range(0, num_classes_total, classes_per_step)
+    ]
 
-def classes_seen_until_round(current_round: int, rounds_per_step:int, schedule: list[list[int]]) -> set[int]:
+
+def classes_seen_until_round(
+    current_round: int, rounds_per_step: int, schedule: list[list[int]]
+) -> set[int]:
     if rounds_per_step <= 0:
         raise ValueError("rounds_per_step must be a positive integer.")
     step_idx = (max(current_round, 1) - 1) // rounds_per_step
     step_idx = min(step_idx, len(schedule) - 1)
 
-    seen : set[int] = set()
+    seen: set[int] = set()
     for step_classes in schedule[: step_idx + 1]:
         seen.update(step_classes)
     return seen
+
 
 def dirichlet_partition(
     labels: np.ndarray, num_clients: int, alpha: float, seed: int = 0
@@ -219,7 +230,9 @@ def load_data(
 
     dataset = _get_cached_dataset(root, window_size, stride)
 
-    partition_seed = (seed + current_round if dirichlet_mode == DIRICHLET_DYNAMIC else seed)
+    partition_seed = (
+        seed + current_round if dirichlet_mode == DIRICHLET_DYNAMIC else seed
+    )
 
     partitions = dirichlet_partition(
         dataset.labels, num_partitions, dirichlet_alpha, partition_seed
@@ -227,11 +240,15 @@ def load_data(
     client_indices = partitions[partition_id]
 
     if classes_per_step is not None:
-        total_classes = (num_classes_total
-                         if num_classes_total is not None
-                         else int(dataset.labels.max()) + 1)
+        total_classes = (
+            num_classes_total
+            if num_classes_total is not None
+            else int(dataset.labels.max()) + 1
+        )
         schedule = build_class_schedule(total_classes, classes_per_step)
-        allowed_classes = classes_seen_until_round(current_round, rounds_per_step, schedule)
+        allowed_classes = classes_seen_until_round(
+            current_round, rounds_per_step, schedule
+        )
         labels_for_client = dataset.labels[client_indices]
         mask = np.isin(labels_for_client, list(allowed_classes))
         client_indices = client_indices[mask]

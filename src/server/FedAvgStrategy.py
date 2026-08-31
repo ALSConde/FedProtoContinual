@@ -21,7 +21,7 @@ class FedAvgStrategy(FedAvg):
         if self._latest_proto_bytes is not None:
             config["global_prototypes"] = self._latest_proto_bytes
         return super().configure_train(server_round, arrays, config, grid)
-    
+
     def configure_evaluate(
         self, server_round: int, arrays: ArrayRecord, config: ConfigRecord, grid: Grid
     ) -> Iterable[Message]:

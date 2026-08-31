@@ -14,7 +14,11 @@ from src.client.ExpansionCriterion import ExpansionCriterion
 from src.model.Models import FCLModel
 from src.model.layers.PrototypeMemory import PrototypeMemory
 from .ClientTask import train_fn, test_fn, compute_expansion_signal
-from ..utils.utd_mahd_dataset import load_data, resolve_classes_per_step, resolve_dirichlet_mode
+from ..utils.utd_mahd_dataset import (
+    load_data,
+    resolve_classes_per_step,
+    resolve_dirichlet_mode,
+)
 
 app = ClientApp()
 
@@ -85,24 +89,28 @@ def _load_client_data(msg: Message, context: Context):
     raw_dirichlet_mode = str(context.run_config.get("dirichlet-mode", "static")).lower()
     dirichlet_mode = resolve_dirichlet_mode(scenario, raw_dirichlet_mode)
 
-    return load_data(
-        partition_id,
-        num_partitions,
-        root=str(context.run_config["data-root"]),
-        window_size=int(context.run_config["window-size"]),
-        stride=int(context.run_config["stride"]),
-        dirichlet_alpha=float(context.run_config["dirichlet-alpha"]),
-        batch_size=int(context.run_config["batch-size"]),
-        current_round=current_round,
-        classes_per_step=classes_per_step,
-        rounds_per_step=int(context.run_config.get("rounds-per-step", 1)),
-        num_classes_total=(
-            int(context.run_config["num-classes-total"])
-            if "num-classes-total" in context.run_config
-            else None
+    return (
+        load_data(
+            partition_id,
+            num_partitions,
+            root=str(context.run_config["data-root"]),
+            window_size=int(context.run_config["window-size"]),
+            stride=int(context.run_config["stride"]),
+            dirichlet_alpha=float(context.run_config["dirichlet-alpha"]),
+            batch_size=int(context.run_config["batch-size"]),
+            current_round=current_round,
+            classes_per_step=classes_per_step,
+            rounds_per_step=int(context.run_config.get("rounds-per-step", 1)),
+            num_classes_total=(
+                int(context.run_config["num-classes-total"])
+                if "num-classes-total" in context.run_config
+                else None
+            ),
+            dirichlet_mode=dirichlet_mode,
         ),
-        dirichlet_mode=dirichlet_mode
-    ), partition_id
+        partition_id,
+    )
+
 
 @app.train()
 def train(msg: Message, context: Context) -> Message:
@@ -132,7 +140,7 @@ def train(msg: Message, context: Context) -> Message:
         )
 
         return Message(content=content, reply_to=msg)
-    
+
     if model.classifier.num_classes > 0:
         signal = compute_expansion_signal(
             model,
