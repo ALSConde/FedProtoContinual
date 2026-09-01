@@ -147,13 +147,17 @@ def train(msg: Message, context: Context) -> Message:
 
         return Message(content=content, reply_to=msg)
 
-    new_classes = 0
+    new_class_ids = set()
     for _, c in train_loader:
         for unique_class in c.unique():
-            if int(unique_class.item()) not in known_consolidated:
-                new_classes += 1
-    if new_classes > 0:
-        model.classifier._expand(new_classes)
+            cid = int(unique_class.item())
+            if cid not in known_consolidated:
+                new_class_ids.add(cid)
+
+    if new_class_ids:
+        required_num_classes = max(model.classifier.num_classes, max(new_class_ids) + 1)
+        if required_num_classes > model.classifier.num_classes:
+            model.classifier._expand(required_num_classes)
 
     if model.classifier.num_classes > 0:
         signal = compute_expansion_signal(

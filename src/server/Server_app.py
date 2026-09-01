@@ -5,6 +5,7 @@ from matplotlib.pylab import dirichlet
 import torch
 from src.model.Models import FCLModel
 from src.server.FedAvgStrategy import FedAvgStrategy
+from src.server.FedProxStrategy import FedProxStrategy
 from src.server.ServerEvaluation import ContinualMetricsTracker, evaluate_global_model
 from src.utils.utd_mahd_dataset import (
     build_class_schedule,
@@ -58,9 +59,10 @@ def main(grid: Grid, context: Context) -> None:
     )
     arrays = ArrayRecord(global_model.get_global_arrays())
 
-    strategy = FedAvgStrategy(
+    strategy = FedProxStrategy(
         embedding_dim=hidden_dim,
         fraction_evaluate=fraction_evaluate,
+        proximal_mu=0.1
     )
 
     held_out_subjects = parse_int_list_config(

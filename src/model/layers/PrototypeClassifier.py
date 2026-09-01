@@ -101,6 +101,14 @@ class PrototypeClassifier(nn.Module):
         Existing prototypes are preserved; new ones are initialized with zeros
         and will be overwritten by the cold start on the first server update.
         """
+        if new_num_classes <= self.num_classes:
+            raise ValueError(
+                f"PrototypeClassifier._expand() called with new_num_classes="
+                f"{new_num_classes}, which is smaller than the current "
+                f"num_classes={self.num_classes}. _expand() expects the "
+                f"absolute target class count (max_class_id + 1), not a "
+                f"delta/count of new classes."
+            )
         extra = new_num_classes - self.num_classes
         padding = torch.zeros(
             extra,
