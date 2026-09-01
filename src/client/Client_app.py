@@ -147,6 +147,14 @@ def train(msg: Message, context: Context) -> Message:
 
         return Message(content=content, reply_to=msg)
 
+    new_classes = 0
+    for _, c in train_loader:
+        for unique_class in c.unique():
+            if int(unique_class.item()) not in known_consolidated:
+                new_classes += 1
+    if new_classes > 0:
+        model.classifier._expand(new_classes)
+
     if model.classifier.num_classes > 0:
         signal = compute_expansion_signal(
             model,
