@@ -114,7 +114,6 @@ class FCLModel(nn.Module):
         )
         self.adapter_local = Adapter(in_features=hidden_dim, down_features=d_hat_local)
         self.alpha_gate = AlphaGate(embedding_dim=hidden_dim)
-        self.prototype_projection = nn.Linear(hidden_dim, hidden_dim)
         self.classifier = PrototypeClassifier(
             embedding_dim=hidden_dim, scale_init=classifier_scale_init
         )
@@ -127,7 +126,7 @@ class FCLModel(nn.Module):
         return x_local
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.prototype_projection(self.embed(x)))
+        return self.classifier(self.embed(x))
 
     def get_global_arrays(self) -> dict:
         sd = {}
@@ -135,12 +134,10 @@ class FCLModel(nn.Module):
             sd[f"feature_extractor.{k}"] = v
         for k, v in self.adapter_global.state_dict().items():
             sd[f"adapter_global.{k}"] = v
-        for k, v in self.prototype_projection.state_dict().items():
-            sd[f"prototype_projection.{k}"] = v
         return sd
 
     def set_global_arrays(self, state_dict: dict) -> None:
-        fe_prefix, ag_prefix, proto_prefix = "feature_extractor.", "adapter_global.", "prototype_projection."
+        fe_prefix, ag_prefix = "feature_extractor.", "adapter_global."
         fe_sd = {
             k[len(fe_prefix) :]: v
             for k, v in state_dict.items()
@@ -151,11 +148,5 @@ class FCLModel(nn.Module):
             for k, v in state_dict.items()
             if k.startswith(ag_prefix)
         }
-        proto_sd = {
-            k[len(proto_prefix) :]: v
-            for k, v in state_dict.items()
-            if k.startswith(proto_prefix)
-        }
         self.feature_extractor.load_state_dict(fe_sd)
         self.adapter_global.load_state_dict(ag_sd)
-        self.prototype_projection.load_state_dict(proto_sd)

@@ -2,6 +2,7 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from src.model.Models import FCLModel
+from torch.utils.data import DataLoader
 
 
 class ContinualMetricsTracker:
@@ -40,7 +41,8 @@ class ContinualMetricsTracker:
 def _global_embed(model: FCLModel, x: torch.Tensor) -> torch.Tensor:
     feats = model.feature_extractor(x)
     h = model.adapter_global(feats)
-    return model.prototype_projection(h)
+    return h
+    # return model.prototype_projection(h)
 
 
 @torch.no_grad()

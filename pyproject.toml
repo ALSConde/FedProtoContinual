@@ -28,7 +28,7 @@ clientapp = "src.client.Client_app:app"
 [tool.flwr.app.config]
 num-server-rounds = 10
 fraction-evaluate = 1.0
-local-epochs = 5
+local-epochs = 10
 learning-rate = 0.001
 input-dim = 6
 batch-size = 16
@@ -41,10 +41,11 @@ stride = 30
 dirichlet-alpha = 0.1
 theta-exp=0.3
 training-scenario = "class-incremental"
-dirichlet-mode = "static"
+dirichlet-mode = "dynamic"
 num-classes = 27
 classes-per-step = 6
 rounds-per-step = 2
+eval-batch-size = 16
 
 [superlink]
 default = "local"
@@ -54,6 +55,6 @@ address = "127.0.0.1:9093"
 insecure = true
 
 [superlink.local-custom-resources]
-options.num-supernodes = 10
+options.num-supernodes = 4
 options.backend.client-resources.num-cpus = 1 # each ClientApp assumes to use 1 CPU (default is 2)
 options.backend.client-resources.num-gpus = 0.25 # each ClientApp uses 25% of VRAM (default is 0.0)

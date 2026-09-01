@@ -43,7 +43,7 @@ def load_data(
 
 
 def train_fn(
-    model: nn.Module,
+    model: FCLModel,
     trainloader: DataLoader,
     memory: PrototypeMemory,
     epochs: int,
@@ -80,7 +80,7 @@ def train_fn(
     return running_loss / max(n_batches, 1)
 
 
-def test_fn(model: nn.Module, valloader: DataLoader, device: torch.device):
+def test_fn(model: FCLModel, valloader: DataLoader, device: torch.device):
     model.to(device)
     model.eval()
     correct, total, loss_sum, n_batches = 0, 0, 0.0, 0
@@ -145,7 +145,7 @@ def compute_expansion_signal(
         y_new = torch.cat(y_new_list) if y_new_list else None
         proto_new = None
 
-        if h_new is not None and len(h_new) > 0:
+        if h_new is not None and len(h_new) > 0 and y_new is not None:
             h_new_norm = F.normalize(h_new, dim=1)
             proto_new = torch.zeros_like(h_new)
             for c in y_new.unique():

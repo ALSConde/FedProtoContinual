@@ -306,4 +306,4 @@ def load_server_test_set(
             "Check the 'server-eval-subjects' key against the dataset's "
             "actual subjects ids."
         )
-    return DataLoader(Subset(dataset, test_indices, batch_size=batch_size))
+    return DataLoader(Subset(dataset, test_indices), batch_size=batch_size)

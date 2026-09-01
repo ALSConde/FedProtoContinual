@@ -134,6 +134,7 @@ def main(grid: Grid, context: Context) -> None:
         initial_arrays=arrays,
         train_config=ConfigRecord({"lr": lr}),
         num_rounds=num_rounds,
+        evaluate_fn=evaluate_fn,
     )
 
     print(f"Training completed.")

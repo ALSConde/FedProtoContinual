@@ -76,6 +76,7 @@ class Adapter(nn.Module):
 
         assert isinstance(last_stage, WDLayer)
         last_stage.expand(delta_d)
+        self.up_proj.expand_input(delta_d)
         self._near_zero_init_new_rows(last_stage, delta_d)
 
         self.width_expansions_since_reduction += 1
