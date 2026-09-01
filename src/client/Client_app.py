@@ -16,6 +16,7 @@ from src.model.layers.PrototypeMemory import PrototypeMemory
 from .ClientTask import train_fn, test_fn, compute_expansion_signal
 from ..utils.utd_mahd_dataset import (
     load_data,
+    parse_int_list_config,
     resolve_classes_per_step,
     resolve_dirichlet_mode,
 )
@@ -89,6 +90,10 @@ def _load_client_data(msg: Message, context: Context):
     raw_dirichlet_mode = str(context.run_config.get("dirichlet-mode", "static")).lower()
     dirichlet_mode = resolve_dirichlet_mode(scenario, raw_dirichlet_mode)
 
+    held_out_subjects = parse_int_list_config(
+        context.run_config.get("server-eval-subjects")
+    )
+
     return (
         load_data(
             partition_id,
@@ -107,6 +112,7 @@ def _load_client_data(msg: Message, context: Context):
                 else None
             ),
             dirichlet_mode=dirichlet_mode,
+            held_out_subjects=held_out_subjects,
         ),
         partition_id,
     )

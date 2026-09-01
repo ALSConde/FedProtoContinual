@@ -157,6 +157,14 @@ def resolve_dirichlet_mode(scenario: str, dirichlet_mode: str) -> str:
     return dirichlet_mode
 
 
+def parse_int_list_config(value) -> list[int]:
+    if value is None:
+        return []
+    if isinstance(value, int):
+        return [value]
+    return [int(part.strip()) for part in str(value).split(",") if part.strip()]
+
+
 def build_class_schedule(
     num_classes_total: int, classes_per_step: int
 ) -> list[list[int]]:
@@ -220,6 +228,7 @@ def load_data(
     rounds_per_step: int = 1,
     num_classes_total: Optional[int] = None,
     dirichlet_mode: str = DIRICHLET_STATIC,
+    held_out_subjects: Optional[list[int]] = None,
 ):
 
     if dirichlet_mode not in VALID_DIRICHLET_MODES:
@@ -230,14 +239,20 @@ def load_data(
 
     dataset = _get_cached_dataset(root, window_size, stride)
 
+    if held_out_subjects:
+        pool_indices = np.where(~np.isin(dataset.subjects(), held_out_subjects))[0]
+    else:
+        pool_indices = np.arange(len(dataset))
+    pool_labels = dataset.labels[pool_indices]
+
     partition_seed = (
         seed + current_round if dirichlet_mode == DIRICHLET_DYNAMIC else seed
     )
 
     partitions = dirichlet_partition(
-        dataset.labels, num_partitions, dirichlet_alpha, partition_seed
+        pool_labels, num_partitions, dirichlet_alpha, partition_seed
     )
-    client_indices = partitions[partition_id]
+    client_indices = pool_indices[partitions[partition_id]]
 
     if classes_per_step is not None:
         total_classes = (
@@ -269,3 +284,26 @@ def load_data(
 
     client_classes = sorted(set(dataset.labels[client_indices].tolist()))
     return train_loader, val_loader, client_classes
+
+
+def load_server_test_set(
+    root: str,
+    held_out_subjects: list[int],
+    window_size: int = 60,
+    stride: int = 30,
+    batch_size: int = 32,
+) -> DataLoader:
+    if not held_out_subjects:
+        raise ValueError(
+            "held_out_subjects must be a non-empty list of subjects ids "
+            "(see the 'server-eval-subjects' key in pyproject.toml)."
+        )
+    dataset = _get_cached_dataset(root, window_size, stride)
+    test_indices = np.where(np.isin(dataset.subjects(), held_out_subjects))[0]
+    if len(test_indices) == 0:
+        raise ValueError(
+            f"No samples found for held_out_subjects={held_out_subjects}. "
+            "Check the 'server-eval-subjects' key against the dataset's "
+            "actual subjects ids."
+        )
+    return DataLoader(Subset(dataset, test_indices, batch_size=batch_size))
