@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "FedProtoContinual"
-version = "0.0.2"
+version = "0.0.3"
 description = "Federated Learning With Prototype and Continual Learning"
 license = "Apache-2.0"
 dependencies = [
@@ -26,9 +26,9 @@ serverapp = "src.server.Server_app:app"
 clientapp = "src.client.Client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 10
+num-server-rounds = 50
 fraction-evaluate = 1.0
-local-epochs = 10
+local-epochs = 1
 learning-rate = 0.001
 input-dim = 6
 batch-size = 16
@@ -40,9 +40,13 @@ window-size = 60
 stride = 30
 dirichlet-alpha = 0.1
 theta-exp=0.3
+lambda-proto=1.0
+lambda-kd=1.0
+kd-mode="kl"
+kd-temperature=2.0
 training-scenario = "federated"
 dirichlet-mode = "static"
-server-eval-subjects = "8"
+server-eval-subjects = "6,7,8"
 num-classes-total = 27
 classes-per-step = 6
 rounds-per-step = 2

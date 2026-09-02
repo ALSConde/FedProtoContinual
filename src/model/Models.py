@@ -80,13 +80,13 @@ class FeatureExtractor(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.conv1 = nn.Conv1d(
-            input_dim, out_channels=32, kernel_size=3, stride=1, padding=1
+            input_dim, out_channels=32, kernel_size=7, stride=1, padding=1
         )
-        self.norm1 = nn.GroupNorm(num_groups=8, num_channels=32)
-        self.conv2 = nn.Conv1d(32, out_channels=64, kernel_size=3, stride=2, padding=1)
+        self.norm1 = nn.GroupNorm(zznum_groups=8, num_channels=32)
+        self.conv2 = nn.Conv1d(32, out_channels=64, kernel_size=5, stride=2, padding=1)
         self.norm2 = nn.GroupNorm(num_groups=8, num_channels=64)
         self.lstm = nn.LSTM(
-            input_size=64, hidden_size=hidden_dim, num_layers=1, batch_first=True
+            input_size=64, hidden_size=hidden_dim, num_layers=3, batch_first=True
         )
 
     def forward(self, x):

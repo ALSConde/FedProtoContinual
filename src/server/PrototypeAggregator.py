@@ -107,6 +107,11 @@ class PrototypeAggregator:
                     c
                 ] + alpha_c * mu_new[i]
 
+        for c in updated_ids:
+            c = c.item()
+            self.mu_global[c] = F.normalize(self.mu_global[c].unsqueeze(0), dim=1).squeeze(0)
+
+
         return self.mu_global.clone(), updated_ids
 
     # ------------------------------------------------------------------

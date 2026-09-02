@@ -61,8 +61,9 @@ def main(grid: Grid, context: Context) -> None:
 
     strategy = FedProxStrategy(
         embedding_dim=hidden_dim,
+        tau=15,
         fraction_evaluate=fraction_evaluate,
-        proximal_mu=0.1
+        proximal_mu=0.01
     )
 
     held_out_subjects = parse_int_list_config(
