@@ -14,7 +14,7 @@ from src.client.ExpansionCriterion import ExpansionCriterion
 from src.model.Models import FCLModel
 from src.model.layers.PrototypeMemory import PrototypeMemory
 from .ClientTask import train_fn, test_fn, compute_expansion_signal
-from ..utils.utd_mahd_dataset import (
+from ..utils.data.utd_mahd_dataset import (
     load_data,
     parse_int_list_config,
     resolve_classes_per_step,
@@ -193,6 +193,11 @@ def train(msg: Message, context: Context) -> Message:
         epochs=int(context.run_config["local-epochs"]),
         lr=float(msg.content["config"]["lr"]),
         device=device,
+        known_consolidated=known_consolidated,
+        lambda_proto=float(context.run_config.get("lambda-proto", 1.0)),
+        lambda_kd=float(context.run_config.get("lambda-kd", 0.5)),
+        kd_mode=str(context.run_config.get("kd-mode", "kl")),
+        kd_temperature=float(context.run_config.get("kd-temperature", 2.0)),
     )
 
     sum_h, counts, class_ids = memory.get_stats()

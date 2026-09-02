@@ -5,6 +5,13 @@ from torch.utils.data import TensorDataset, random_split, DataLoader
 import torch.nn.functional as F
 from src.model.Models import FCLModel
 from src.model.layers.PrototypeMemory import PrototypeMemory
+from src.utils.losses.Losses import (
+    distillation_loss,
+    distillation_loss_kl,
+    local_class_prototypes,
+    prototype_alignment_loss,
+    split_by_know,
+)
 
 
 # Function to load data -- With sintetic data for testing purposes
@@ -49,9 +56,24 @@ def train_fn(
     epochs: int,
     lr: float,
     device: torch.device,
+    known_consolidated: Optional[set] = None,
+    lambda_proto: float = 1.0,
+    lambda_kd: float = 0.5,
+    kd_mode: str = "kl",
+    kd_temperature: float = 2.0,
 ) -> float:
+    if kd_mode not in ("kl", "embedding_mse"):
+        raise ValueError(
+            f"Invalid kd_mode: {kd_mode}. Must be 'kl' or 'embedding_mse'."
+        )
+
     model.to(device)
     model.train()
+    known_consolidated = known_consolidated or set()
+    known_sorted = sorted(known_consolidated)
+
+    embed_global = model.frozen_global_embed_fn()
+
     optmizer = torch.optim.Adam(model.parameters(), lr=lr)
     running_loss, n_batches = 0.0, 0
 
@@ -69,8 +91,31 @@ def train_fn(
                 continue  # cold start: without prototypes yet, just accumulate statistics
 
             optmizer.zero_grad()
+
             logits = model.classifier(h)
             loss = F.cross_entropy(logits, y)
+
+            l_proto = prototype_alignment_loss(
+                h, y, model.classifier.prototypes, known_consolidated
+            )
+            if l_proto is not None:
+                loss += lambda_proto * l_proto
+
+            h_global = embed_global(x)
+            if kd_mode == "embedding_mse":
+                l_kd = distillation_loss(h, h_global)
+            else:
+                reference_prototypes = (
+                    model.classifier.prototypes[known_sorted]
+                    if len(known_sorted) >= 2
+                    else None
+                )
+                l_kd = distillation_loss_kl(
+                    h, h_global, reference_prototypes, temperature=kd_temperature
+                )
+            if l_kd is not None:
+                loss += lambda_kd * l_kd
+
             loss.backward()
             optmizer.step()
 
@@ -119,10 +164,7 @@ def compute_expansion_signal(
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             h = model.embed(x)
-            cons_mask = torch.tensor(
-                [int(label) in known_consolidated for label in y.tolist()],
-                device=device,
-            )
+            cons_mask = split_by_know(y, known_consolidated)
             if cons_mask.any():
                 h_cons_list.append(h[cons_mask])
                 y_cons_list.append(y[cons_mask])
@@ -143,14 +185,11 @@ def compute_expansion_signal(
 
         h_new = torch.cat(h_new_list) if h_new_list else None
         y_new = torch.cat(y_new_list) if y_new_list else None
-        proto_new = None
-
-        if h_new is not None and len(h_new) > 0 and y_new is not None:
-            h_new_norm = F.normalize(h_new, dim=1)
-            proto_new = torch.zeros_like(h_new)
-            for c in y_new.unique():
-                mask = y_new == c
-                proto_new[mask] = h_new_norm[mask].mean(dim=0, keepdim=True)
+        proto_new = (
+            local_class_prototypes(h_new, y_new)
+            if h_new is not None and len(h_new) > 0 and y_new is not None
+            else None
+        )
 
         logits, labels_for_ce = None, None
         if h_cons is not None and len(h_cons) > 0 and model.classifier.num_classes > 1:

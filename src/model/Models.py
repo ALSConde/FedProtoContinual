@@ -1,7 +1,8 @@
+import copy
+from typing import Callable
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from src.model.blocks.Adapter import Adapter
 from src.model.layers.AlphaGate import AlphaGate
 from src.model.layers.PrototypeClassifier import PrototypeClassifier
@@ -118,12 +119,31 @@ class FCLModel(nn.Module):
             embedding_dim=hidden_dim, scale_init=classifier_scale_init
         )
 
-    def embed(self, x: torch.Tensor) -> torch.Tensor:
+    def embed_both(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         feats = self.feature_extractor(x)
         x_global = self.adapter_global(feats)
         delta_local = self.adapter_local.forward_delta(x_global)
         x_local = self.alpha_gate(x_global, delta_local)
+        return x_local, x_global
+
+    def embed(self, x: torch.Tensor) -> torch.Tensor:
+        x_local, _ = self.embed_both(x)
         return x_local
+
+    def frozen_global_embed_fn(self) -> Callable[[torch.Tensor], torch.Tensor]:
+        frozen_fe = copy.deepcopy(self.feature_extractor)
+        frozen_ag = copy.deepcopy(self.adapter_global)
+        for p in frozen_fe.parameters():
+            p.requires_grad_(False)
+        for p in frozen_ag.parameters():
+            p.requires_grad_(False)
+
+        def _embed_global(x: torch.Tensor) -> torch.Tensor:
+            with torch.no_grad():
+                feats = frozen_fe(x)
+                return frozen_ag(feats)
+
+        return _embed_global
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.classifier(self.embed(x))

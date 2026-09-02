@@ -7,7 +7,7 @@ from src.model.Models import FCLModel
 from src.server.FedAvgStrategy import FedAvgStrategy
 from src.server.FedProxStrategy import FedProxStrategy
 from src.server.ServerEvaluation import ContinualMetricsTracker, evaluate_global_model
-from src.utils.utd_mahd_dataset import (
+from src.utils.data.utd_mahd_dataset import (
     build_class_schedule,
     classes_seen_until_round,
     load_server_test_set,

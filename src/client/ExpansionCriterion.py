@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch
 
 from src.model.blocks.Adapter import Adapter
+from src.utils.losses.Losses import normalized_sq_distance
 
 
 class ExpansionCriterion:
@@ -27,16 +28,10 @@ class ExpansionCriterion:
     def _cosine_gap(
         h: Optional[torch.Tensor], prototypes: Optional[torch.Tensor]
     ) -> Optional[float]:
-        if h is None or prototypes is None or h.numel() == 0 or prototypes.numel() == 0:
+        sq_dist = normalized_sq_distance(h, prototypes, reduction="mean")
+        if sq_dist is None:
             return None
-        h_n = F.normalize(h, dim=1)
-        p_n = F.normalize(prototypes, dim=1)
-
-        # 0.5 * ||h_hat - p_hat||^2 = (1 - <h_hat, p_hat>)
-        # cos_sim = (h_n * p_n)
-        # return (1 - cos_sim).mean().item()
-        sq_dist = F.mse_loss(h_n, p_n, reduction="none").sum(dim=1)
-        return (0.5 * sq_dist).mean().item()
+        return (0.5 * sq_dist).item()
 
     @staticmethod
     def _scaled_entropy(
