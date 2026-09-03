@@ -77,7 +77,7 @@ def distillation_loss_kl(
     if reference_prototypes is None or reference_prototypes.shape[0] < 2:
         return None
 
-    p_n = F.normalize(h_local, dim=1)
+    p_n = F.normalize(reference_prototypes, dim=1)
     h_local_n = F.normalize(h_local, dim=1)
     h_global_n = F.normalize(h_global, dim=1)
 

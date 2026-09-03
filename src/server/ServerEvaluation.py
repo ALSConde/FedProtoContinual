@@ -42,7 +42,6 @@ def _global_embed(model: FCLModel, x: torch.Tensor) -> torch.Tensor:
     feats = model.feature_extractor(x)
     h = model.adapter_global(feats)
     return h
-    # return model.prototype_projection(h)
 
 
 @torch.no_grad()

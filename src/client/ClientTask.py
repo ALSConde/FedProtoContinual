@@ -84,8 +84,8 @@ def train_fn(
         ) in trainloader:
             x, y = x.to(device), y.to(device)
 
-            h = model.embed(x)
-            memory.update(h, y)
+            h, h_shared = model.embed_both(x)
+            memory.update(h_shared, y)
 
             if model.classifier.num_classes == 0:
                 continue  # cold start: without prototypes yet, just accumulate statistics

@@ -78,6 +78,7 @@ class Adapter(nn.Module):
         last_stage.expand(delta_d)
         self.up_proj.expand_input(delta_d)
         self._near_zero_init_new_rows(last_stage, delta_d)
+        self._near_zero_init_new_cols(self.up_proj, delta_d)
 
         self.width_expansions_since_reduction += 1
 

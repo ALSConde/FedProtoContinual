@@ -65,7 +65,7 @@ class ExpansionCriterion:
 
         weights = dict(self.base_weights)
         available = {k: v for k, v in terms.items() if v is not None}
-        missing_weight = sum(weights[k] for k, v in terms.items() if v is not None)
+        missing_weight = sum(weights[k] for k, v in terms.items() if v is None)
 
         if len(available) == 0:
             raise RuntimeError(
