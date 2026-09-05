@@ -1,8 +1,10 @@
+import copy
 from typing import Optional
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
 from src.model.layers.WDLayer import WDLayer
+from src.model.layers.WDStats import WDStats
 
 
 class Adapter(nn.Module):
@@ -154,3 +156,69 @@ class Adapter(nn.Module):
     def _near_zero_init_new_cols(self, layer: WDLayer, n_new: int):
         with torch.no_grad():
             layer.weight[:, -n_new:].normal_(0.0, self.near_identity_eps)
+
+
+# Incorporation of adpter into the global model.
+def promote_to_incorporated(adapter: "Adapter", alpha_gate) -> "Adapter":
+    alpha = alpha_gate.alpha_vector()
+
+    candidate = copy.deepcopy(adapter)
+    up = candidate.up_proj
+    assert isinstance(up, WDLayer)
+
+    if alpha.shape[0] != up.out_features:
+        raise RuntimeError(
+            f"Shape mismatch: alpha vector has shape dim {alpha.shape[0]}, "
+            f"but up_proj.out_features is {up.out_features}. up_proj must have "
+            "the same output dimension as the alpha vector for incorporation."
+            "Verify in_features of adapter and embedding_dim of alpha_gate."
+        )
+
+    with torch.no_grad():
+        up.weight.mul_(alpha.to(up.weight.device, up.weight.dtype).unsqueeze(1))
+        if up.bias is not None:
+            up.bias.mul_(alpha.to(up.bias.device, up.bias.dtype))
+
+        up.stats = WDStats()
+
+    return candidate
+
+
+def adapter_topology(adapter: "Adapter") -> dict:
+    return {
+        "in_features": adapter.in_features,
+        "stage_dims": [
+            (stage.in_features, stage.out_features, stage.bias is not None)
+            for stage in adapter.down_stages
+        ],
+        "up_proj_dims": (
+            adapter.up_proj.in_features,
+            adapter.up_proj.out_features,
+            adapter.up_proj.bias is not None,
+        ),
+        "max_bottleneck": adapter.max_bottleneck,
+        "max_depth": adapter.max_depth,
+        "near_identity_eps": adapter.near_identity_eps,
+    }
+
+
+def build_adapter_from_topology(topology: dict) -> "Adapter":
+    stage_dims = topology["stage_dims"]
+    if not stage_dims:
+        raise RuntimeError("Topology must contain at least one down stage.")
+
+    first_in, first_out, first_bias = stage_dims[0]
+    adapter = Adapter(
+        in_features=topology["in_features"],
+        down_features=first_out,
+        max_bottleneck=topology.get("max_bottleneck"),
+        max_depth=topology.get("max_depth"),
+        near_identity_eps=topology.get("near_identity_eps", 1e-3),
+    )
+
+    adapter.down_stages = nn.ModuleList(
+        [WDLayer(d_in, d_out, bias=has_bias) for d_in, d_out, has_bias in stage_dims]
+    )
+    up_in, up_out, up_bias = topology["up_proj_dims"]
+    adapter.up_proj = WDLayer(up_in, up_out, bias=up_bias)
+    return adapter
