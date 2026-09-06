@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from src.model.Models import FCLModel
 from torch.utils.data import DataLoader
 
+from src.model.blocks.Adapter import Adapter
+
 
 class ContinualMetricsTracker:
     def __init__(self) -> None:
@@ -41,6 +43,12 @@ class ContinualMetricsTracker:
 def _global_embed(model: FCLModel, x: torch.Tensor) -> torch.Tensor:
     feats = model.feature_extractor(x)
     h = model.adapter_global(feats)
+    if len(model.incorporated_adapters) > 0:
+        h += sum(
+            a.forward_delta(h)
+            for a in model.incorporated_adapters
+            if isinstance(a, Adapter)
+        )
     return h
 
 
