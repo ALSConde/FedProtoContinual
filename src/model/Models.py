@@ -160,7 +160,7 @@ class FCLModel(nn.Module):
                         for a in frozen_incorp
                         if isinstance(a, Adapter)
                     )
-                    return x_global
+                return x_global
 
         return _embed_global
 
