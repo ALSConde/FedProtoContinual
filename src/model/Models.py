@@ -153,26 +153,13 @@ class FCLModel(nn.Module):
         def _embed_global(x: torch.Tensor) -> torch.Tensor:
             with torch.no_grad():
                 feats = frozen_fe(x)
-                if feats is None:
-                    raise RuntimeError(
-                        "Feature extractor returned None. Check the input shape."
-                    )
                 x_global = frozen_ag(feats)
-                if x_global is None:
-                    raise RuntimeError(
-                        "Global adapter returned None. Check the input shape."
-                    )
                 if len(frozen_incorp) > 0:
-                    for i, a in enumerate(frozen_incorp):
-                        delta_i = a.forward_delta(x_global)
-                        if delta_i is None:
-                            raise RuntimeError(
-                                f"frozen_global_embed_fn: incorporated_adapters[{i}]"
-                                ".forward_delta(x_global) returns None. Topology "
-                                f"of adapter {i}: in_features={getattr(a, 'in_features', '?')}, "
-                                f"depth={getattr(a, 'depth', '?')}."
-                            )
-                        x_global = x_global + delta_i
+                    x_global = x_global + sum(
+                        a.forward_delta(x_global)
+                        for a in frozen_incorp
+                        if isinstance(a, Adapter)
+                    )
                     return x_global
 
         return _embed_global
