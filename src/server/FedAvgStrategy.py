@@ -3,16 +3,32 @@ from typing import Iterable, Optional
 from flwr.app import ArrayRecord, ConfigRecord, Message, MetricRecord
 from flwr.serverapp import Grid
 from flwr.serverapp.strategy import FedAvg
+from src.server.AdapterIncorporation import AdapterIncorporationState
 from src.server.PrototypeAggregator import PrototypeAggregator
 
 
 class FedAvgStrategy(FedAvg):
-    def __init__(self, embedding_dim: int, tau: float = 100.0, **kwargs):
+    def __init__(
+        self,
+        embedding_dim: int,
+        tau: float = 100.0,
+        a_max: int = 3,
+        candidacy_quorum: float = 0.5,
+        incorporation_monitor_rounds: int = 3,
+        incorporation_degrade_tolerance: float = 0.02,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.proto_aggregator = PrototypeAggregator(
             embedding_dim=embedding_dim, tau=tau
         )
         self._latest_proto_bytes: Optional[bytes] = None
+        self.incorporation = AdapterIncorporationState(
+            a_max=a_max,
+            quorum=candidacy_quorum,
+            monitor_rounds=incorporation_monitor_rounds,
+            degrade_tolerance=incorporation_degrade_tolerance,
+        )
 
     def configure_train(
         self, server_round: int, arrays: ArrayRecord, config: ConfigRecord, grid: Grid
@@ -20,6 +36,7 @@ class FedAvgStrategy(FedAvg):
         config["server_round"] = server_round
         if self._latest_proto_bytes is not None:
             config["global_prototypes"] = self._latest_proto_bytes
+        arrays = self.incorporation.on_configure_train(arrays, config)
         return super().configure_train(server_round, arrays, config, grid)
 
     def configure_evaluate(
@@ -28,6 +45,7 @@ class FedAvgStrategy(FedAvg):
         config["server_round"] = server_round
         if self._latest_proto_bytes is not None:
             config["global_prototypes"] = self._latest_proto_bytes
+        self.incorporation.on_configure_evaluate(arrays, config)
         return super().configure_evaluate(server_round, arrays, config, grid)
 
     def aggregate_train(
@@ -54,4 +72,14 @@ class FedAvgStrategy(FedAvg):
             if len(ids_all) > 0:
                 self._latest_proto_bytes = pickle.dumps((mu_all, ids_all))
 
+        self.incorporation.on_aggregate_train(replies)
+
         return arrays, metrics
+
+    def aggregate_evaluate(
+        self, server_round: int, replies: Iterable[Message]
+    ) -> Optional[MetricRecord]:
+        replies = list(replies)
+        metrics = super().aggregate_evaluate(server_round, replies)
+        self.incorporation.on_aggregate_evaluate(replies, metrics)
+        return metrics

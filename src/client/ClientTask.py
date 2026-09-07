@@ -125,6 +125,117 @@ def train_fn(
     return running_loss / max(n_batches, 1)
 
 
+def embed_with_extra_incorporated(
+    model: FCLModel, x: torch.Tensor, extra_adapter: Optional[nn.Module] = None
+):
+    feats = model.feature_extractor(x)
+    x_global = model.adapter_global(feats)
+    incorporated = model.incorporated_delta(x_global)
+    if extra_adapter is not None:
+        incorporated += extra_adapter.forward_delta(x_global)
+    delta_local = model.adapter_local.forward_delta(x_global)
+    x_local = model.alpha_gate(x_global, delta_local)
+    x_final = x_local + incorporated
+    x_shared = x_global + incorporated
+    return x_final, x_shared
+
+
+def evaluate_with_candidate(
+    model: FCLModel,
+    candidate: Optional[nn.Module],
+    loader: DataLoader,
+    device: torch.device,
+):
+    model.to(device)
+    model.eval()
+    correct, total, loss_sum, n_batches = 0, 0, 0.0, 0
+
+    with torch.no_grad():
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            if model.classifier.num_classes == 0:
+                continue
+            h, _ = embed_with_extra_incorporated(model, x, candidate)
+            logits = model.classifier(h)
+            loss_sum += F.cross_entropy(logits, y).item()
+            correct += (logits.argmax(dim=1) == y).sum().item()
+            total += y.size(0)
+            n_batches += 1
+
+    if total == 0:
+        return 0.0, 0.0
+    return loss_sum / max(n_batches, 1), correct / total
+
+
+def short_local_adaptation(
+    model: FCLModel,
+    candidate: nn.Module,
+    adapt_loader: DataLoader,
+    lr: float,
+    device: torch.device,
+    max_steps: int,
+):
+    model.to(device)
+    model.train()
+
+    trainable_params = list(model.adapter_local.parameters()) + list(
+        model.alpha_gate.parameters()
+    )
+    frozen_modules = [
+        model.feature_extractor,
+        model.adapter_global,
+        model.incorporated_adapters,
+        model.classifier,
+        candidate,
+    ]
+    saved_requires_grad = []
+    for module in frozen_modules:
+        for p in module.parameters():
+            saved_requires_grad.append((p, p.requires_grad))
+            p.requires_grad_(False)
+
+    optimizer = torch.optim.Adam(trainable_params, lr=lr)
+    steps_done = 0
+    try:
+        if model.classifier.num_classes == 0:
+            for x, y in adapt_loader:
+                if steps_done >= max_steps:
+                    break
+                x, y = x.to(device), y.to(device)
+                optimizer.zero_grad()
+                h, _ = embed_with_extra_incorporated(model, x, candidate)
+                logits = model.classifier(h)
+                loss = F.cross_entropy(logits, y)
+                loss.backward()
+                optimizer.step()
+                steps_done += 1
+    finally:
+        for p, requires_grad in saved_requires_grad:
+            p.requires_grad_(requires_grad)
+
+    return steps_done
+
+
+def vote_on_candidate(
+    model: FCLModel,
+    candidate: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    device: torch.device,
+    lr: float,
+    adapt_steps: int,
+    vote_margin: float,
+) -> tuple[float, float, float]:
+    _, acc_before = evaluate_with_candidate(model, candidate, val_loader, device)
+    short_local_adaptation(
+        model, candidate, train_loader, lr=lr, device=device, max_steps=adapt_steps
+    )
+    _, acc_after = evaluate_with_candidate(model, candidate, val_loader, device)
+
+    vote = 1.0 if (acc_after - acc_before) > vote_margin else 0.0
+    return vote, acc_before, acc_after
+
+
 def test_fn(model: FCLModel, valloader: DataLoader, device: torch.device):
     model.to(device)
     model.eval()

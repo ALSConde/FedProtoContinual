@@ -1,7 +1,6 @@
 from flwr.app import ArrayRecord, ConfigRecord, Context
 from flwr.common import MetricsRecord
 from flwr.serverapp import Grid, ServerApp
-from matplotlib.pylab import dirichlet
 import torch
 from src.model.Models import FCLModel
 from src.server.FedAvgStrategy import FedAvgStrategy
@@ -27,6 +26,8 @@ def main(grid: Grid, context: Context) -> None:
     input_dim = int(context.run_config["input-dim"])
     hidden_dim = int(context.run_config["hidden-dim"])
     d_hat_global = int(context.run_config["d-hat-global"])
+    d_hat_local = int(context.run_config["d-hat-local"])
+    a_max = int(context.run_config.get("a-max", 3))
 
     scenario = str(context.run_config.get("training-scenario", "federated")).lower()
     class_scen = context.run_config.get("classes-per-step")
@@ -56,6 +57,8 @@ def main(grid: Grid, context: Context) -> None:
         input_dim=input_dim,
         hidden_dim=hidden_dim,
         d_hat_global=d_hat_global,
+        d_hat_local=d_hat_local,
+        a_max=a_max,
     )
     arrays = ArrayRecord(global_model.get_global_arrays())
 
@@ -63,7 +66,15 @@ def main(grid: Grid, context: Context) -> None:
         embedding_dim=hidden_dim,
         tau=15,
         fraction_evaluate=fraction_evaluate,
-        proximal_mu=0.01
+        proximal_mu=0.01,
+        a_max=a_max,
+        candidacy_quorum=float(context.run_config.get("candidacy-quorum", 0.5)),
+        incorporation_monitor_rounds=int(
+            context.run_config.get("incorporation-monitor-rounds", 3)
+        ),
+        incorporation_degrade_tolerance=float(
+            context.run_config.get("incorporation-degrade-tolerance", 0.02)
+        ),
     )
 
     held_out_subjects = parse_int_list_config(
@@ -101,7 +112,10 @@ def main(grid: Grid, context: Context) -> None:
                 input_dim=input_dim,
                 hidden_dim=hidden_dim,
                 d_hat_global=d_hat_global,
+                d_hat_local=d_hat_local,
+                a_max=a_max,
             )
+            eval_model.load_incorporated_topology(strategy.incorporation.topologies)
             eval_model.set_global_arrays(eval_arrays.to_torch_state_dict())
             eval_model.classifier.update_from_global(mu_all, ids_all)
             eval_model.to(device)
