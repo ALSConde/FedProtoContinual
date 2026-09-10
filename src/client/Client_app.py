@@ -385,7 +385,7 @@ def _handle_vote_round(
             "acc_before": acc_before,
             "acc_after": acc_after,
             "partition_id": own_partition_id,
-            "num_examples": num_examples,
+            "num-examples": num_examples,
         }
     )
     return Message(content=RecordDict({"metrics": metrics_reply}), reply_to=msg)
