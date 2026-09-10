@@ -199,7 +199,7 @@ def dirichlet_partition_across_clients(
 ) -> list[np.ndarray]:
     rng = np.random.RandomState(seed)
     num_classes = int(labels.max()) + 1
-    client_indices: list[list[int]] = [[] for _ in range(num_classes)]
+    client_indices: list[list[int]] = [[] for _ in range(num_clients)]
 
     for c in range(num_classes):
         idx_c = np.where(labels == c)[0]
@@ -209,7 +209,7 @@ def dirichlet_partition_across_clients(
         for client_id, split in enumerate(np.split(idx_c, cut_points)):
             client_indices[client_id].extend(split.tolist())
 
-    return [np.array(indices) for indices in client_indices]
+    return [np.array(indices, dtype=int) for indices in client_indices]
 
 
 def resolve_available_subjects(
