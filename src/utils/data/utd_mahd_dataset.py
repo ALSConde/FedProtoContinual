@@ -371,7 +371,6 @@ def load_data(
         round_seed = (
             seed + current_round if dirichlet_mode == DIRICHLET_DYNAMIC else seed
         )
-
         partitions = dirichlet_partition_across_clients(
             pool_labels, num_partitions, dirichlet_alpha, round_seed
         )

@@ -22,6 +22,8 @@ app = ServerApp()
 def main(grid: Grid, context: Context) -> None:
     num_rounds = int(context.run_config["num-server-rounds"])
     fraction_evaluate = context.run_config["fraction-evaluate"]
+    batch_size = int(context.run_config["batch-size"])
+    num_partitions = int(context.run_config["num_partitions"])
     lr = context.run_config["learning-rate"]
     input_dim = int(context.run_config["input-dim"])
     hidden_dim = int(context.run_config["hidden-dim"])
@@ -152,7 +154,7 @@ def main(grid: Grid, context: Context) -> None:
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
-        train_config=ConfigRecord({"lr": lr}),
+        train_config=ConfigRecord({"lr": lr, "batch-size": batch_size, "num_partitions": num_partitions}),
         num_rounds=num_rounds,
         evaluate_fn=evaluate_fn,
     )

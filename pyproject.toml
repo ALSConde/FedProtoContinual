@@ -26,6 +26,7 @@ serverapp = "src.server.Server_app:app"
 clientapp = "src.client.Client_app:app"
 
 [tool.flwr.app.config]
+num_partitions=5
 num-server-rounds = 50
 fraction-evaluate = 1.0
 local-epochs = 1
@@ -46,14 +47,14 @@ kd-mode="kl"
 kd-temperature=2.0
 training-scenario = "federated"
 dirichlet-mode = "static"
-partition-mode = "subject"
+partition-mode = "pooled"
 server-eval-subjects = "6,7,8"
 num-classes-total = 27
-classes-per-step = 6
-rounds-per-step = 2
+classes-per-step = 3
+rounds-per-step = 6
 eval-batch-size = 16
-a-max = 3
-theta-alpha = 0.32
+a-max = 1
+theta-alpha = 0.05
 candidacy-patience = 3
 candidacy-cooldown = 5
 candidacy-quorum = 0.5
