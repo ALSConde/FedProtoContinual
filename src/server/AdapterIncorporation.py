@@ -181,7 +181,7 @@ class AdapterIncorporationState:
             return
 
         adapter: Adapter = torch.load(
-            io.BytesIO(candidate["adapter_bytes"]), weights_only=False
+            io.BytesIO(candidate["adapter_bytes"]), map_location="cpu", weights_only=False
         )
         idx = len(self.topologies)
 

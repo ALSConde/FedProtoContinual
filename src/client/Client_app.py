@@ -49,7 +49,7 @@ def _apply_incorporated_topology(model: FCLModel, config: ConfigRecord) -> None:
         model.load_incorporated_topology(topologies)
 
 
-def _load_local_state(context: Context, model: FCLModel) -> set:
+def _load_local_state(context: Context, model: FCLModel, device: torch.device) -> set:
     if _LOCAL_STATE_KEY not in context.state:
         return set()
 
@@ -57,10 +57,10 @@ def _load_local_state(context: Context, model: FCLModel) -> set:
     blob = record["blob"]
     if not isinstance(blob, bytes):
         raise ValueError(f"Expected bytes for local state blob, got {type(blob)}")
-    bundle = torch.load(io.BytesIO(blob), weights_only=False)
-    model.adapter_local = bundle["adapter_local"]
-    model.alpha_gate = bundle["alpha_gate"]
-    model.classifier = bundle["classifier"]
+    bundle = torch.load(io.BytesIO(blob), map_location=device, weights_only=False)
+    model.adapter_local = bundle["adapter_local"].to(device)
+    model.alpha_gate = bundle["alpha_gate"].to(device)
+    model.classifier = bundle["classifier"].to(device)
     return bundle["known_consolidated"]
 
 
@@ -110,15 +110,17 @@ def _stash_local_checkpoint(context: Context, model: FCLModel, key: str) -> None
     context.state[key] = ConfigRecord({"blob": buffer.getvalue()})
 
 
-def _restore_local_checkpoint(context: Context, model: FCLModel, key: str) -> bool:
+def _restore_local_checkpoint(
+    context: Context, model: FCLModel, key: str, device: torch.device
+) -> bool:
     if key not in context.state:
         return False
     blob = context.state[key]["blob"]
     if not isinstance(blob, bytes):
         raise ValueError(f"Expected bytes for local checkpoint blob, got {type(blob)}")
-    bundle = torch.load(io.BytesIO(blob), weights_only=False)
-    model.adapter_local = bundle["adapter_local"]
-    model.alpha_gate = bundle["alpha_gate"]
+    bundle = torch.load(io.BytesIO(blob), map_location=device, weights_only=False)
+    model.adapter_local = bundle["adapter_local"].to(device)
+    model.alpha_gate = bundle["alpha_gate"].to(device)
     del context.state[key]
     return True
 
@@ -134,6 +136,7 @@ def _apply_incorporation_outcome(
     config: ConfigRecord,
     own_partition_id: int,
     candidacy_criterion: CandidacyCriterion,
+    device: torch.device,
 ) -> None:
     status = config.get("incorporation_outcome_status")
     outcome_pid = config.get("candidate_outcome_partition_id")
@@ -143,13 +146,13 @@ def _apply_incorporation_outcome(
             model.reset_local_branch()
             candidacy_criterion.notify_outcome(incorporated=True)
         elif status == "reverted":
-            _restore_local_checkpoint(context, model, _PROMOTED_CHECKPOINT_KEY)
+            _restore_local_checkpoint(context, model, _PROMOTED_CHECKPOINT_KEY, device)
             candidacy_criterion.notify_outcome(incorporated=False)
         elif status == "confirmed":
             _clear_checkpoint(context, _PROMOTED_CHECKPOINT_KEY)
 
     if config.get("last_incorporation_reverted", False):
-        _restore_local_checkpoint(context, model, _VOTE_ADAPT_CHECKPOINT_KEY)
+        _restore_local_checkpoint(context, model, _VOTE_ADAPT_CHECKPOINT_KEY, device)
     if config.get("last_incorporation_confirmed", False):
         _clear_checkpoint(context, _VOTE_ADAPT_CHECKPOINT_KEY)
 
@@ -214,13 +217,15 @@ def train(msg: Message, context: Context) -> Message:
     config = msg.content["config"]
 
     model = _build_model(context)
+    model.to(device)
     _apply_incorporated_topology(model, config)
     model.set_global_arrays(msg.content["arrays"].to_torch_state_dict())
+    model.to(device)
 
-    known_consolidated = _load_local_state(context, model)
+    known_consolidated = _load_local_state(context, model, device)
     candidacy_criterion = _load_candidacy_criterion(context)
     _apply_incorporation_outcome(
-        context, model, config, partition_id, candidacy_criterion
+        context, model, config, partition_id, candidacy_criterion, device
     )
     _load_global_prototypes(model, config, known_consolidated=known_consolidated)
 
@@ -335,7 +340,11 @@ def train(msg: Message, context: Context) -> Message:
 
 
 def _handle_vote_round(
-    msg: Message, context: Context, model: FCLModel, known_consolidated: set
+    msg: Message,
+    context: Context,
+    model: FCLModel,
+    known_consolidated: set,
+    device: torch.device,
 ) -> Message:
     config = msg.content["config"]
     own_partition_id = int(context.node_config["partition-id"])
@@ -356,7 +365,10 @@ def _handle_vote_round(
         )
         return Message(content=RecordDict({"metrics": metrics_reply}), reply_to=msg)
 
-    candidate = torch.load(io.BytesIO(config["candidate_adapter"]), weights_only=False)
+    candidate = torch.load(
+        io.BytesIO(config["candidate_adapter"]), map_location=device, weights_only=False
+    )
+    candidate.to(device)
 
     _stash_local_checkpoint(context, model, _VOTE_ADAPT_CHECKPOINT_KEY)
     vote, acc_before, acc_after = vote_on_candidate(
@@ -364,7 +376,7 @@ def _handle_vote_round(
         candidate,
         train_loader,
         valloader,
-        device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
+        device=device,
         lr=float(
             context.run_config.get(
                 "vote-adapt-lr", context.run_config.get("learning-rate", 0.001)
@@ -397,14 +409,16 @@ def evaluate(msg: Message, context: Context) -> Message:
     config = msg.content["config"]
 
     model = _build_model(context)
+    model.to(device)
     _apply_incorporated_topology(model, config)
     model.set_global_arrays(msg.content["arrays"].to_torch_state_dict())
+    model.to(device)
 
-    known_consolidated = _load_local_state(context, model)
+    known_consolidated = _load_local_state(context, model, device)
     _load_global_prototypes(model, config, known_consolidated=known_consolidated)
 
     if config.get("vote_round", False):
-        return _handle_vote_round(msg, context, model, known_consolidated)
+        return _handle_vote_round(msg, context, model, known_consolidated, device)
 
     (_, valloader, _), _ = _load_client_data(msg, context)
 
