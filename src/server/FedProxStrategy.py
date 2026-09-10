@@ -1,5 +1,3 @@
-import logging
-import logging.config
 import pickle
 from typing import Iterable, Optional
 from flwr.app import ArrayRecord, ConfigRecord, Message, MetricRecord
