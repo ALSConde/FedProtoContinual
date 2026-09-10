@@ -122,6 +122,7 @@ class FCLModel(nn.Module):
         self.classifier = PrototypeClassifier(
             embedding_dim=hidden_dim, scale_init=classifier_scale_init
         )
+
         self.incorporated_adapters = nn.ModuleList()
 
     def incorporated_delta(self, x_global: torch.Tensor) -> torch.Tensor:
@@ -229,3 +230,4 @@ class FCLModel(nn.Module):
                     f"{len(self.incorporated_adapters)} incorporated adapters. Call load_incorporated_topology() "
                     "before set_global_arrays()."
                 )
+            self.incorporated_adapters[idx].load_state_dict(grouped[idx])

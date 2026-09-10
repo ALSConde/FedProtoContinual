@@ -137,11 +137,7 @@ def _apply_incorporation_outcome(
 ) -> None:
     status = config.get("incorporation_outcome_status")
     outcome_pid = config.get("candidate_outcome_partition_id")
-    if (
-        status is not None
-        and outcome_pid is not None
-        and int(outcome_pid) == own_partition_id
-    ):
+    if status != "none" and int(outcome_pid) == own_partition_id:
         if status == "accepted":
             _stash_local_checkpoint(context, model, _PROMOTED_CHECKPOINT_KEY)
             model.reset_local_branch()
@@ -205,6 +201,7 @@ def _load_client_data(msg: Message, context: Context):
             ),
             dirichlet_mode=dirichlet_mode,
             held_out_subjects=held_out_subjects,
+            partition_mode=str(context.run_config.get("partition-mode", "subject")),
         ),
         partition_id,
     )
@@ -225,13 +222,12 @@ def train(msg: Message, context: Context) -> Message:
     _apply_incorporation_outcome(
         context, model, config, partition_id, candidacy_criterion
     )
-    _load_global_prototypes(
-        model, msg.content["config"], known_consolidated=known_consolidated
-    )
+    _load_global_prototypes(model, config, known_consolidated=known_consolidated)
 
     (train_loader, _, _), partition_id = _load_client_data(msg, context)
 
     if len(train_loader.dataset) == 0:
+        _save_candidacy_criterion(context, candidacy_criterion)
         arrays_reply = ArrayRecord(model.get_global_arrays())
         metrics_reply = MetricRecord({"train_loss": 0.0, "num-examples": 0})
         config_reply = ConfigRecord({"proto_stats": pickle.dumps((None, None, []))})
@@ -290,7 +286,7 @@ def train(msg: Message, context: Context) -> Message:
         train_loader,
         memory,
         epochs=int(context.run_config["local-epochs"]),
-        lr=float(msg.content["config"]["lr"]),
+        lr=float(config["lr"]),
         device=device,
         known_consolidated=known_consolidated,
         lambda_proto=float(context.run_config.get("lambda-proto", 1.0)),
@@ -344,10 +340,11 @@ def _handle_vote_round(
     config = msg.content["config"]
     own_partition_id = int(context.node_config["partition-id"])
     proposer_partition_id = int(config.get("candidate_partition_id", -1))
+
     (train_loader, valloader, _), _ = _load_client_data(msg, context)
     num_examples = len(valloader.dataset)
 
-    if own_partition_id == proposer_partition_id:
+    if own_partition_id == proposer_partition_id or num_examples == 0:
         metrics_reply = MetricRecord(
             {
                 "vote": 0.0,

@@ -21,6 +21,10 @@ DIRICHLET_STATIC = "static"
 DIRICHLET_DYNAMIC = "dynamic"
 VALID_DIRICHLET_MODES = (DIRICHLET_STATIC, DIRICHLET_DYNAMIC)
 
+PARTITION_SUBJECT = "subject"
+PARTITION_POOLED = "pooled"
+VALID_PARTITION_MODES = (PARTITION_SUBJECT, PARTITION_POOLED)
+
 _INERTIAL_FILENAME_RE = re.compile(
     r"a(?P<action>\d{1,2})_s(?P<subject>\d{1,2})_t(?P<trial>\d{1,2})_inertial",
     re.IGNORECASE,
@@ -190,7 +194,7 @@ def classes_seen_until_round(
     return seen
 
 
-def dirichlet_partition(
+def dirichlet_partition_across_clients(
     labels: np.ndarray, num_clients: int, alpha: float, seed: int = 0
 ) -> list[np.ndarray]:
     rng = np.random.RandomState(seed)
@@ -206,6 +210,78 @@ def dirichlet_partition(
             client_indices[client_id].extend(split.tolist())
 
     return [np.array(indices) for indices in client_indices]
+
+
+def resolve_available_subjects(
+    all_subjects: np.ndarray, held_out_subjects: list[int]
+) -> list[int]:
+    held_out_set = set(int(s) for s in held_out_subjects)
+    return sorted(int(s) for s in np.unique(all_subjects) if int(s) not in held_out_set)
+
+
+def assign_subject_to_partition(
+    available_subjects: list[int], partition_id: int, num_partitions: int
+) -> int:
+    if num_partitions != len(available_subjects):
+        raise ValueError(
+            f"num_partitions={num_partitions} does not match the number of "
+            f"available subjects={len(available_subjects)}. "
+            "In subject-based partitioning, the number of clients must equal "
+            "the number of available subjects."
+            f" Available subjects: {available_subjects}"
+        )
+    if not (0 <= partition_id < num_partitions):
+        raise ValueError(
+            f"partition_id={partition_id} is out of range for num_partitions={num_partitions}."
+            f"[0, {num_partitions - 1}] is the valid range for available subjects."
+        )
+    return available_subjects[partition_id]
+
+
+def class_retention_fractions(num_classes: int, alpha: float, seed: int) -> np.ndarray:
+    rng = np.random.RandomState(seed)
+    proportions = rng.dirichlet(np.repeat(alpha, num_classes))
+    return proportions / proportions.max()
+
+
+def _apply_class_schedule(
+    client_indices: np.ndarray,
+    labels: np.ndarray,
+    classes_per_step: Optional[int],
+    current_round: int,
+    rounds_per_step: int,
+    num_classes_total: Optional[int],
+) -> np.ndarray:
+    if classes_per_step is None:
+        return client_indices
+    total_classes = (
+        num_classes_total if num_classes_total is not None else int(labels.max()) + 1
+    )
+    schedule = build_class_schedule(total_classes, classes_per_step)
+    allowed_classes = classes_seen_until_round(total_classes, rounds_per_step, schedule)
+    labels_for_client = labels[client_indices]
+    mask = np.isin(labels_for_client, list(allowed_classes))
+    return client_indices[mask]
+
+
+def _apply_class_retetion(
+    client_indices: np.ndarray,
+    all_labels: np.ndarray,
+    num_classes_total: int,
+    alpha: float,
+    seed: int,
+) -> np.ndarray:
+    keep_fraction = class_retention_fractions(num_classes_total, alpha, seed)
+    labels_for_client = all_labels[client_indices]
+    rng = np.random.RandomState(seed)
+
+    keep_mask = np.zeros(len(client_indices), dtype=bool)
+    for c in np.unique(labels_for_client):
+        idx_c = np.where(labels_for_client == c)[0]
+        rng.shuffle(idx_c)
+        n_keep = max(1, int(round(keep_fraction[c] * len(idx_c))))
+        keep_mask[idx_c[:n_keep]] = True
+    return client_indices[keep_mask]
 
 
 @lru_cache(maxsize=4)
@@ -229,6 +305,7 @@ def load_data(
     num_classes_total: Optional[int] = None,
     dirichlet_mode: str = DIRICHLET_STATIC,
     held_out_subjects: Optional[list[int]] = None,
+    partition_mode: str = PARTITION_SUBJECT,
 ):
 
     if dirichlet_mode not in VALID_DIRICHLET_MODES:
@@ -237,42 +314,83 @@ def load_data(
             f"Expected one of {VALID_DIRICHLET_MODES}."
         )
 
+    if partition_mode not in VALID_PARTITION_MODES:
+        raise ValueError(
+            f"Unknown partition-mode '{partition_mode}'. "
+            f"Expected one of {VALID_PARTITION_MODES}."
+        )
+
     dataset = _get_cached_dataset(root, window_size, stride)
+    held_out_subjects = held_out_subjects or []
+    total_classes = (
+        num_classes_total
+        if num_classes_total is not None
+        else int(dataset.labels.max()) + 1
+    )
 
-    if held_out_subjects:
-        pool_indices = np.where(~np.isin(dataset.subjects(), held_out_subjects))[0]
+    if partition_mode == PARTITION_SUBJECT:
+        available_subjects = resolve_available_subjects(
+            dataset.subjects(), held_out_subjects
+        )
+        subject_id = assign_subject_to_partition(
+            available_subjects, partition_id, num_partitions
+        )
+
+        client_indices = np.where(dataset.subjects() == subject_id)[0]
+
+        client_indices = _apply_class_schedule(
+            client_indices,
+            dataset.labels,
+            classes_per_step,
+            current_round,
+            rounds_per_step,
+            num_classes_total,
+        )
+
+        retention_seed = (
+            seed + partition_id + current_round
+            if dirichlet_mode == DIRICHLET_DYNAMIC
+            else seed + partition_id
+        )
+        if len(client_indices) > 0:
+            client_indices = _apply_class_retetion(
+                client_indices,
+                dataset.labels,
+                total_classes,
+                dirichlet_alpha,
+                retention_seed,
+            )
+        round_seed = retention_seed
     else:
-        pool_indices = np.arange(len(dataset))
-    pool_labels = dataset.labels[pool_indices]
+        if held_out_subjects:
+            pool_indices = np.where(~np.isin(dataset.subjects(), held_out_subjects))[0]
+        else:
+            pool_indices = np.arange(len(dataset))
+        pool_labels = dataset.labels[pool_indices]
 
-    partition_seed = (
-        seed + current_round if dirichlet_mode == DIRICHLET_DYNAMIC else seed
-    )
-
-    partitions = dirichlet_partition(
-        pool_labels, num_partitions, dirichlet_alpha, partition_seed
-    )
-    client_indices = pool_indices[partitions[partition_id]]
-
-    if classes_per_step is not None:
-        total_classes = (
-            num_classes_total
-            if num_classes_total is not None
-            else int(dataset.labels.max()) + 1
+        round_seed = (
+            seed + current_round if dirichlet_mode == DIRICHLET_DYNAMIC else seed
         )
-        schedule = build_class_schedule(total_classes, classes_per_step)
-        allowed_classes = classes_seen_until_round(
-            current_round, rounds_per_step, schedule
+
+        partitions = dirichlet_partition_across_clients(
+            pool_labels, num_partitions, dirichlet_alpha, round_seed
         )
-        labels_for_client = dataset.labels[client_indices]
-        mask = np.isin(labels_for_client, list(allowed_classes))
-        client_indices = client_indices[mask]
+        client_indices = pool_indices[partitions[partition_id]]
 
-        if len(client_indices) == 0:
-            empty_loader = DataLoader(Subset(dataset, []), batch_size=batch_size)
-            return empty_loader, empty_loader, []
+        client_indices = _apply_class_schedule(
+            client_indices,
+            dataset.labels,
+            classes_per_step,
+            current_round,
+            rounds_per_step,
+            num_classes_total,
+        )
 
-    rng = np.random.RandomState(partition_seed)
+    if len(client_indices) == 0:
+        empty_loader = DataLoader(Subset(dataset, []), batch_size=batch_size)
+        return empty_loader, empty_loader, []
+
+    rng = np.random.RandomState(round_seed)
     rng.shuffle(client_indices)
     n_val = int(val_fraction * len(client_indices))
     val_idx, train_idx = client_indices[:n_val], client_indices[n_val:]

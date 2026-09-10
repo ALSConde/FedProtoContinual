@@ -115,6 +115,7 @@ def main(grid: Grid, context: Context) -> None:
                 d_hat_local=d_hat_local,
                 a_max=a_max,
             )
+
             eval_model.load_incorporated_topology(strategy.incorporation.topologies)
             eval_model.set_global_arrays(eval_arrays.to_torch_state_dict())
             eval_model.classifier.update_from_global(mu_all, ids_all)
@@ -141,6 +142,8 @@ def main(grid: Grid, context: Context) -> None:
                 if forgetting is not None:
                     metrics["avg_forgetting"] = forgetting
                 metrics["num_classes_seen"] = int(len(allowed_classes))
+
+            metrics.update(strategy.incorporation.metrics_snapshot())
             return MetricsRecord(metrics)
 
     else:

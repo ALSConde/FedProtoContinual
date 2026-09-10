@@ -3,7 +3,6 @@ import torch
 import torch.nn.functional as F
 from src.model.Models import FCLModel
 from torch.utils.data import DataLoader
-
 from src.model.blocks.Adapter import Adapter
 
 

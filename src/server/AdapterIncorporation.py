@@ -31,27 +31,51 @@ class AdapterIncorporationState:
         self._reversion_watch: Optional[dict] = None
         self._last_known_acc: Optional[float] = None
 
+        self.total_candidacies_proposed: int = 0
+        self.total_accepted: int = 0
+        self.total_rejected: int = 0
+        self.total_reverted: int = 0
+        self.total_confirmed: int = 0
+        self._last_vote_favorable_fraction: Optional[float] = None
+
+    def metrics_snapshot(self) -> dict:
+        snapshot = {
+            "incorp_active_adapters": len(self.topologies),
+            "incorp_candidacies_proposed": self.total_candidacies_proposed,
+            "incorp_accepted": self.total_accepted,
+            "incorp_rejected": self.total_rejected,
+            "incorp_reverted": self.total_reverted,
+            "incorp_confirmed": self.total_confirmed,
+            "incorp_candidacy_pending": int(self.pending_candidate is not None),
+            "incorp_monitoring": int(self._reversion_watch is not None),
+        }
+        if self._last_vote_favorable_fraction is not None:
+            snapshot["incorp_last_vote_favorable_fraction"] = (
+                self._last_vote_favorable_fraction
+            )
+        return snapshot
+
     def on_configure_train(
         self, arrays: ArrayRecord, config: ConfigRecord
     ) -> ArrayRecord:
-        if self.topologies:
-            config["incorporated_topologies"] = pickle.dumps(self.topologies)
+        config["incorporated_topologies"] = pickle.dumps(self.topologies)
         config["candidacy_locked"] = (
             self.pending_candidate is not None or self._reversion_watch is not None
         )
 
-        if self._post_vote_signal is not None:
-            config["candidate_outcome_partition_id"] = self._post_vote_signal[
-                "partition_id"
-            ]
-            config["candidate_outcome_status"] = self._post_vote_signal["status"]
-            self._post_vote_signal = None
+        outcome = self._post_vote_signal
+        self._post_vote_signal = None
+        config["candidate_outcome_partition_id"] = (
+            outcome["partition_id"] if outcome is not None else -1
+        )
+        config["candidate_outcome_status"] = (
+            outcome["status"] if outcome is not None else "none"
+        )
 
-        if self._broadcast_signal == "reverted":
-            config["last_incorporation_reverted"] = True
-        elif self._broadcast_signal == "confirmed":
-            config["last_incorporation_confirmed"] = True
+        broadcast = self._broadcast_signal
         self._broadcast_signal = None
+        config["last_incorporation_reverted"] = broadcast == "reverted"
+        config["last_incorporation_confirmed"] = broadcast == "confirmed"
 
         if self._pending_full_arrays_override is not None:
             arrays = ArrayRecord(self._pending_full_arrays_override)
@@ -71,6 +95,7 @@ class AdapterIncorporationState:
                     "partition_id": int(cfg["candidate_partition_id"]),
                     "adapter_bytes": cfg["candidate_adapter"],
                 }
+                self.total_candidacies_proposed += 1
                 break
 
     def on_configure_evaluate(self, arrays: ArrayRecord, config: ConfigRecord) -> None:
@@ -78,12 +103,14 @@ class AdapterIncorporationState:
             k: v.clone() for k, v in arrays.to_torch_state_dict().items()
         }
 
-        if self.topologies:
-            config["incorporated_topologies"] = pickle.dumps(self.topologies)
+        config["incorporated_topologies"] = pickle.dumps(self.topologies)
         if self.pending_candidate is not None:
             config["vote_round"] = True
             config["candidate_adapter"] = self.pending_candidate["adapter_bytes"]
             config["candidate_partition_id"] = self.pending_candidate["partition_id"]
+        else:
+            config["vote_round"] = False
+            config["candidate_partition_id"] = -1
 
     def on_aggregate_evaluate(
         self,
@@ -104,6 +131,7 @@ class AdapterIncorporationState:
                 self._last_known_acc = acc
 
     def _reject_candidate(self, candidate: dict) -> None:
+        self.total_rejected += 1
         self._post_vote_signal = {
             "partition_id": candidate["partition_id"],
             "status": "reverted",
@@ -133,10 +161,12 @@ class AdapterIncorporationState:
             votes.append(float(metrics["vote"]))
 
             if not votes:
+                self._last_vote_favorable_fraction = None
                 self._reject_candidate(candidate)
                 return
 
         favorable_fraction = sum(votes) / len(votes)
+        self._last_vote_favorable_fraction = favorable_fraction
         if favorable_fraction >= self.quorum:
             self._accept_candidate(candidate)
         else:
@@ -168,6 +198,7 @@ class AdapterIncorporationState:
         for k, v in adapter.state_dict().items():
             new_full_sd[f"{prefix}{k}"] = v.clone()
 
+        self.total_accepted += 1
         self._pending_full_arrays_override = new_full_sd
         self._reversion_watch = {"rounds_elapsed": 0}
         self._post_vote_signal = {
@@ -193,6 +224,7 @@ class AdapterIncorporationState:
             self._reversion_watch = None
             self._checkpoint_before_incorp = None
             self._broadcast_signal = "confirmed"
+            self.total_confirmed += 1
             if accepted_pid is not None:
                 self._post_vote_signal = {
                     "partition_id": accepted_pid,
@@ -207,7 +239,7 @@ class AdapterIncorporationState:
         self._checkpoint_before_incorp = None
         if checkpoint is None:
             return
-
+        self.total_reverted += 1
         self.topologies = checkpoint["topologies"]
         self._pending_full_arrays_override = checkpoint["arrays_sd"]
         self._broadcast_signal = "reverted"

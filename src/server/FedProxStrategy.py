@@ -76,6 +76,10 @@ class FedProxStrategy(FedProx):
 
         self.incorporation.on_aggregate_train(replies)
 
+        if metrics is not None:
+            for k, v in self.incorporation.metrics_snapshot().items():
+                metrics[k] = v
+
         return arrays, metrics
 
     def aggregate_evaluate(
