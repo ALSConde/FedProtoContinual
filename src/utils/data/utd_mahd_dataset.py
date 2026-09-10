@@ -368,6 +368,16 @@ def load_data(
             pool_indices = np.arange(len(dataset))
         pool_labels = dataset.labels[pool_indices]
 
+        if not (0 <= partition_id < num_partitions):
+            raise ValueError(
+                f"partition_id={partition_id} is out of range for "
+                f"num_partitions={num_partitions}. This usually means the number "
+                f"of supernodes launched by the simulation does not match the "
+                f"'num_partitions' value configured for the run "
+                f"(pyproject.toml [tool.flwr.app.config] or --run-config). "
+                f"[0, {num_partitions - 1}] is the valid range."
+            )
+
         round_seed = (
             seed + current_round if dirichlet_mode == DIRICHLET_DYNAMIC else seed
         )

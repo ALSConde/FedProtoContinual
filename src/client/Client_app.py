@@ -165,7 +165,7 @@ def _load_global_prototypes(
 
 def _load_client_data(msg: Message, context: Context):
     partition_id = int(context.node_config["partition-id"])
-    num_partitions = int(context.run_config["num_partitions"])
+    num_partitions = int(context.node_config["num-partitions"])
 
     current_round = int(msg.content["config"].get("server_round", 1))
 

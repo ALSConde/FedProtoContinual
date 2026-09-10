@@ -26,7 +26,6 @@ serverapp = "src.server.Server_app:app"
 clientapp = "src.client.Client_app:app"
 
 [tool.flwr.app.config]
-num_partitions=5
 num-server-rounds = 50
 fraction-evaluate = 1.0
 local-epochs = 1
@@ -62,15 +61,3 @@ vote-adapt-steps = 10
 vote-margin = 0.01
 incorporation-monitor-rounds = 5
 incorporation-degrade-tolerance = 0.02
-
-[superlink]
-default = "local"
-
-[superlink.local-poc]
-address = "127.0.0.1:9093"
-insecure = true
-
-[superlink.local-custom-resources]
-options.num-supernodes = 5
-options.backend.client-resources.num-cpus = 1 # each ClientApp assumes to use 1 CPU (default is 2)
-options.backend.client-resources.num-gpus = 0.25 # each ClientApp uses 25% of VRAM (default is 0.0)

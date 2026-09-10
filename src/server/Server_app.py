@@ -1,5 +1,4 @@
-from flwr.app import ArrayRecord, ConfigRecord, Context
-from flwr.common import MetricsRecord
+from flwr.app import ArrayRecord, ConfigRecord, Context, MetricRecord
 from flwr.serverapp import Grid, ServerApp
 import torch
 from src.model.Models import FCLModel
@@ -23,7 +22,6 @@ def main(grid: Grid, context: Context) -> None:
     num_rounds = int(context.run_config["num-server-rounds"])
     fraction_evaluate = context.run_config["fraction-evaluate"]
     batch_size = int(context.run_config["batch-size"])
-    num_partitions = int(context.run_config["num_partitions"])
     lr = context.run_config["learning-rate"]
     input_dim = int(context.run_config["input-dim"])
     hidden_dim = int(context.run_config["hidden-dim"])
@@ -146,7 +144,7 @@ def main(grid: Grid, context: Context) -> None:
                 metrics["num_classes_seen"] = int(len(allowed_classes))
 
             metrics.update(strategy.incorporation.metrics_snapshot())
-            return MetricsRecord(metrics)
+            return MetricRecord(metrics)
 
     else:
         print("server-side evaluation disable (no held-out subjects specified).")
@@ -154,7 +152,7 @@ def main(grid: Grid, context: Context) -> None:
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
-        train_config=ConfigRecord({"lr": lr, "batch-size": batch_size, "num_partitions": num_partitions}),
+        train_config=ConfigRecord({"lr": lr, "batch-size": batch_size,}),
         num_rounds=num_rounds,
         evaluate_fn=evaluate_fn,
     )
