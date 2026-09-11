@@ -30,12 +30,18 @@ class FedAvgStrategy(FedAvg):
             degrade_tolerance=incorporation_degrade_tolerance,
         )
 
+        self.incorp_flag: str = "false"
+
     def configure_train(
         self, server_round: int, arrays: ArrayRecord, config: ConfigRecord, grid: Grid
     ) -> Iterable[Message]:
         config["server_round"] = server_round
         if self._latest_proto_bytes is not None:
             config["global_prototypes"] = self._latest_proto_bytes
+        if config["incorp_status"] is not None:
+            self.incorp_flag = str(config["incorp_status"]).lower()
+        else:
+            self.incorp_flag = "false"
         arrays = self.incorporation.on_configure_train(arrays, config)
         return super().configure_train(server_round, arrays, config, grid)
 
@@ -73,8 +79,8 @@ class FedAvgStrategy(FedAvg):
                 self._latest_proto_bytes = pickle.dumps((mu_all, ids_all))
 
         self.incorporation.on_aggregate_train(replies)
-
-        if metrics is not None:
+        
+        if metrics is not None and self.incorp_flag != "false":
             for k, v in self.incorporation.metrics_snapshot().items():
                 metrics[k] = v
 

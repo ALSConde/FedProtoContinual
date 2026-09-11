@@ -28,6 +28,7 @@ def main(grid: Grid, context: Context) -> None:
     d_hat_global = int(context.run_config["d-hat-global"])
     d_hat_local = int(context.run_config["d-hat-local"])
     a_max = int(context.run_config.get("a-max", 3))
+    incorp_flag = str(context.run_config.get("incorp_status", "false")).lower()
 
     scenario = str(context.run_config.get("training-scenario", "federated")).lower()
     class_scen = context.run_config.get("classes-per-step")
@@ -142,8 +143,8 @@ def main(grid: Grid, context: Context) -> None:
                 if forgetting is not None:
                     metrics["avg_forgetting"] = forgetting
                 metrics["num_classes_seen"] = int(len(allowed_classes))
-
-            metrics.update(strategy.incorporation.metrics_snapshot())
+            if incorp_flag != "false":
+                metrics.update(strategy.incorporation.metrics_snapshot())
             return MetricRecord(metrics)
 
     else:
@@ -152,7 +153,7 @@ def main(grid: Grid, context: Context) -> None:
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
-        train_config=ConfigRecord({"lr": lr, "batch-size": batch_size,}),
+        train_config=ConfigRecord({"lr": lr, "batch-size": batch_size, "incorp_status": incorp_flag}),
         num_rounds=num_rounds,
         evaluate_fn=evaluate_fn,
     )
