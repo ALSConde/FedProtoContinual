@@ -1,0 +1,797 @@
+🎊 Successfully started run 16247744426019329148
+[92mINFO [0m:      Starting Flower Simulation
+Successfully installed FedProtoContinual to /root/.flwr/apps/ALSConde.FedProtoContinual.0.0.4.041a9702.
+training-scenario='class-incremental': introducing 9 new classes every 6 round(s) over 18 rounds. dirichlet-mode='static' (forced static under class-incremental).
+Centralized evaluation enabled on held-out subjects [6, 7, 8] with (1615 samples).
+[92mINFO [0m:      Starting FedProxStrategy strategy:
+[92mINFO [0m:      	├── Number of rounds: 18
+[92mINFO [0m:      	├── ArrayRecord (0.44 MB)
+[92mINFO [0m:      	├── ConfigRecord (train): {'lr': 0.001, 'batch-size': 32, 'incorp_status': true}
+[92mINFO [0m:      	├── ConfigRecord (evaluate): (empty!)
+[92mINFO [0m:      	├──> FedProx settings:
+[92mINFO [0m:      	│	└── Proximal mu: 0.01
+[92mINFO [0m:      	├──> Sampling:
+[92mINFO [0m:      	│	├──Fraction: train (1.00) | evaluate ( 1.00)
+[92mINFO [0m:      	│	├──Minimum nodes: train (2) | evaluate (2)
+[92mINFO [0m:      	│	└──Minimum available nodes: 2
+[92mINFO [0m:      	└──> Keys in records:
+[92mINFO [0m:      		├── Weighted by: 'num-examples'
+[92mINFO [0m:      		├── ArrayRecord key: 'arrays'
+[92mINFO [0m:      		└── ConfigRecord key: 'config'
+[92mINFO [0m:      
+[92mINFO [0m:      Initial global evaluation results: None
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 1/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/worker.py:2051: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
+  warnings.warn(
+[36m(ClientAppActor pid=1001669)[0m /workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/torch/nn/modules/rnn.py:1169: UserWarning: RNN module weights are not part of single contiguous chunk of memory. This means they need to be compacted at every call, possibly greatly increasing memory usage. To compact weights again call flatten_parameters(). (Triggered internally at /pytorch/aten/src/ATen/native/cudnn/RNN.cpp:1479.)
+[36m(ClientAppActor pid=1001669)[0m   result = _VF.lstm(
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 3.2878583170474407, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2514354423586925, 'contribution_ratio': 0.025394880612993418, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 3.294610499118385, 'eval_acc': 0.0437636761487965}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.294308655889411, 'server_eval_acc': 0.0, 'num_classes_seen': 9, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 2/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 3.2793244513582285, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2514138334248132, 'contribution_ratio': 0.030023770689122514, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 3.290157562968159, 'eval_acc': 0.054704595185995616}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.2806724939848246, 'server_eval_acc': 0.10736842105263159, 'bwt': 0.1111111111111111, 'avg_forgetting': 0.0, 'worst_class_forgetting': 0.0, 'worst_class_forgetting_id': 3, 'worst_class_bwt': 0.0, 'worst_class_bwt_id': 3, 'num_classes_seen': 9, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 3/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 3.0794254597502073, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.25138249926953005, 'contribution_ratio': 0.046385358381633976, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 3.2804259270494827, 'eval_acc': 0.07221006564551423}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.220270209563406, 'server_eval_acc': 0.12210526315789473, 'bwt': 0.1111111111111111, 'avg_forgetting': 0.1111111111111111, 'worst_class_forgetting': 1.0, 'worst_class_forgetting_id': 2, 'worst_class_bwt': 0.0, 'worst_class_bwt_id': 3, 'num_classes_seen': 9, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 4/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 2.801313973218181, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.251531338299959, 'contribution_ratio': 0.06762766109608491, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 3.1853058969426726, 'eval_acc': 0.087527352297593}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.2192446693621184, 'server_eval_acc': 0.1368421052631579, 'bwt': 0.1274134174742694, 'avg_forgetting': 0.09480880474795282, 'worst_class_forgetting': 0.7843137254901961, 'worst_class_forgetting_id': 2, 'worst_class_bwt': 0.0, 'worst_class_bwt_id': 3, 'num_classes_seen': 9, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 5/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 2.73816402907305, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2517801058771557, 'contribution_ratio': 0.08688653046381596, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 3.01868570468271, 'eval_acc': 0.12910284463894967}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.1321674256575736, 'server_eval_acc': 0.13894736842105262, 'bwt': 0.13027560411000252, 'avg_forgetting': 0.09758846067162497, 'worst_class_forgetting': 0.7058823529411764, 'worst_class_forgetting_id': 2, 'worst_class_bwt': 0.0, 'worst_class_bwt_id': 6, 'num_classes_seen': 9, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 6/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 2.554382418880389, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.25193737606714756, 'contribution_ratio': 0.10504902341584677, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.69043393303755, 'eval_acc': 0.1684901531728665}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.076794177607486, 'server_eval_acc': 0.12631578947368421, 'bwt': 0.11792379787163908, 'avg_forgetting': 0.11220784060613356, 'worst_class_forgetting': 0.803921568627451, 'worst_class_forgetting_id': 2, 'worst_class_bwt': 0.0, 'worst_class_bwt_id': 3, 'num_classes_seen': 9, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 7/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 2.3563856288067133, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2520686039647481, 'contribution_ratio': 0.11891027626170211, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.5896123475527606, 'eval_acc': 0.2210065645514223}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.1874633709209386, 'server_eval_acc': 0.07751196172248803, 'bwt': 0.13855450464022998, 'avg_forgetting': 0.11231312448350989, 'worst_class_forgetting': 0.803921568627451, 'worst_class_forgetting_id': 2, 'worst_class_bwt': 0.0, 'worst_class_bwt_id': 6, 'num_classes_seen': 18, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 8/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 2.2551176058781426, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2521277233221685, 'contribution_ratio': 0.12831502961827518, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.5449850094048845, 'eval_acc': 0.21881838074398244}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.141864876313643, 'server_eval_acc': 0.0861244019138756, 'bwt': 0.07885282971348487, 'avg_forgetting': 0.04966740460147148, 'worst_class_forgetting': 0.7254901960784313, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.028169014084507046, 'worst_class_bwt_id': 16, 'num_classes_seen': 18, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 9/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 2.221261446199152, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.25214642533978837, 'contribution_ratio': 0.13832529325448967, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.4853674829832224, 'eval_acc': 0.24070021881838077}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.1059502802397074, 'server_eval_acc': 0.08995215311004785, 'bwt': 0.08084523497955548, 'avg_forgetting': 0.060986038605748596, 'worst_class_forgetting': 0.6862745098039216, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.016666666666666666, 'worst_class_bwt_id': 17, 'num_classes_seen': 18, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 10/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 2.1466823441766225, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.25210690540441155, 'contribution_ratio': 0.14324928534412956, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.4304364580555085, 'eval_acc': 0.2428884026258206}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.0545719806087073, 'server_eval_acc': 0.10813397129186603, 'bwt': 0.09999641733011962, 'avg_forgetting': 0.057502297531160394, 'worst_class_forgetting': 0.6274509803921569, 'worst_class_forgetting_id': 2, 'worst_class_bwt': 0.0, 'worst_class_bwt_id': 6, 'num_classes_seen': 18, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 11/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 2.0500775041632924, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2520503357562729, 'contribution_ratio': 0.14411600726509405, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.363905905546888, 'eval_acc': 0.262582056892779}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 3.097361814234245, 'server_eval_acc': 0.10909090909090909, 'bwt': 0.10070339802593936, 'avg_forgetting': 0.0692927281662548, 'worst_class_forgetting': 0.7254901960784313, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.07042253521126761, 'worst_class_bwt_id': 16, 'num_classes_seen': 18, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 12/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 1.953277764295562, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.25193411208960365, 'contribution_ratio': 0.14262681522814882, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.267403193410516, 'eval_acc': 0.2735229759299781}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 2.9700921261709845, 'server_eval_acc': 0.12535885167464114, 'bwt': 0.11641461485637568, 'avg_forgetting': 0.06671226392273087, 'worst_class_forgetting': 0.7647058823529411, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.07042253521126761, 'worst_class_bwt_id': 16, 'num_classes_seen': 18, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 13/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 1.8717213558874009, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2517841144918683, 'contribution_ratio': 0.13834106527159618, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.285691747519328, 'eval_acc': 0.2560175054704595}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 2.903034501917222, 'server_eval_acc': 0.15913312693498452, 'bwt': 0.10210432273604685, 'avg_forgetting': 0.08665434563711347, 'worst_class_forgetting': 0.8627450980392157, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.07042253521126761, 'worst_class_bwt_id': 16, 'num_classes_seen': 27, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 14/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 1.828192068517839, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.25163540146973784, 'contribution_ratio': 0.13704837216818094, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.1729688468768944, 'eval_acc': 0.30196936542669583}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 2.8395955360341736, 'server_eval_acc': 0.20309597523219813, 'bwt': 0.11375413518770541, 'avg_forgetting': 0.05508013273349874, 'worst_class_forgetting': 0.7843137254901961, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.0625, 'worst_class_bwt_id': 24, 'num_classes_seen': 27, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 15/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 1.7525419288018824, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2514686734212733, 'contribution_ratio': 0.12906464385571914, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.1755792445548687, 'eval_acc': 0.28665207877461707}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 2.8574633713477167, 'server_eval_acc': 0.19442724458204336, 'bwt': 0.10265857930870398, 'avg_forgetting': 0.08107272618822975, 'worst_class_forgetting': 0.803921568627451, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.17391304347826086, 'worst_class_bwt_id': 23, 'num_classes_seen': 27, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 16/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 1.6985100556866228, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2512971345559855, 'contribution_ratio': 0.1274659149935555, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.1257767982069025, 'eval_acc': 0.2975929978118162}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 2.8326784269728527, 'server_eval_acc': 0.2086687306501548, 'bwt': 0.11840848955346556, 'avg_forgetting': 0.08442002544244685, 'worst_class_forgetting': 0.9215686274509804, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.06172839506172839, 'worst_class_bwt_id': 25, 'num_classes_seen': 27, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 17/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 1.647865904057789, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2511303286750572, 'contribution_ratio': 0.12639800249915095, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.125663454909989, 'eval_acc': 0.29321663019693656}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 2.833558521329803, 'server_eval_acc': 0.2130030959752322, 'bwt': 0.12106622300775946, 'avg_forgetting': 0.08985703138271786, 'worst_class_forgetting': 0.7843137254901961, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.07042253521126761, 'worst_class_bwt_id': 16, 'num_classes_seen': 27, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 18/18]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_train: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'train_loss': 1.6131318173344238, 'expanded_width': 0.0, 'expanded_depth': 0.0, 'expansion_g': 0.0, 'alpha_mean': 0.2510261341063371, 'contribution_ratio': 0.12561408111027308, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      configure_evaluate: Sampled 5 nodes (out of 5)
+[92mINFO [0m:      aggregate_evaluate: Received 5 results and 0 failures
+[92mINFO [0m:      	└──> Aggregated MetricRecord: {'eval_loss': 2.038468426505116, 'eval_acc': 0.31291028446389496}
+[92mINFO [0m:      Global evaluation
+[92mINFO [0m:      	└──> MetricRecord: {'server_eval_loss': 2.7990183980841388, 'server_eval_acc': 0.22105263157894736, 'bwt': 0.12809088362429896, 'avg_forgetting': 0.09967848903148716, 'worst_class_forgetting': 0.8235294117647058, 'worst_class_forgetting_id': 2, 'worst_class_bwt': -0.07407407407407407, 'worst_class_bwt_id': 25, 'num_classes_seen': 27, 'incorp_active_adapters': 0, 'incorp_candidacies_proposed': 0, 'incorp_accepted': 0, 'incorp_rejected': 0, 'incorp_reverted': 0, 'incorp_confirmed': 0, 'incorp_candidacy_pending': 0, 'incorp_monitoring': 0}
+[92mINFO [0m:      
+[92mINFO [0m:      Strategy execution finished in 29.90s
+[92mINFO [0m:      
+[92mINFO [0m:      Final results:
+[92mINFO [0m:      
+[92mINFO [0m:      	Global Arrays:
+[92mINFO [0m:      		ArrayRecord (0.437 MB)
+[92mINFO [0m:      	
+[92mINFO [0m:      	Aggregated ClientApp-side Train Metrics:
+[92mINFO [0m:      	{ 1: { 'alpha_mean': '2.5144e-01',
+[92mINFO [0m:      	       'contribution_ratio': '2.5395e-02',
+[92mINFO [0m:      	       'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	       'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	       'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'train_loss': '3.2879e+00'},
+[92mINFO [0m:      	  2: { 'alpha_mean': '2.5141e-01',
+[92mINFO [0m:      	       'contribution_ratio': '3.0024e-02',
+[92mINFO [0m:      	       'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	       'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	       'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'train_loss': '3.2793e+00'},
+[92mINFO [0m:      	  3: { 'alpha_mean': '2.5138e-01',
+[92mINFO [0m:      	       'contribution_ratio': '4.6385e-02',
+[92mINFO [0m:      	       'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	       'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	       'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'train_loss': '3.0794e+00'},
+[92mINFO [0m:      	  4: { 'alpha_mean': '2.5153e-01',
+[92mINFO [0m:      	       'contribution_ratio': '6.7628e-02',
+[92mINFO [0m:      	       'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	       'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	       'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'train_loss': '2.8013e+00'},
+[92mINFO [0m:      	  5: { 'alpha_mean': '2.5178e-01',
+[92mINFO [0m:      	       'contribution_ratio': '8.6887e-02',
+[92mINFO [0m:      	       'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	       'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	       'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'train_loss': '2.7382e+00'},
+[92mINFO [0m:      	  6: { 'alpha_mean': '2.5194e-01',
+[92mINFO [0m:      	       'contribution_ratio': '1.0505e-01',
+[92mINFO [0m:      	       'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	       'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	       'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'train_loss': '2.5544e+00'},
+[92mINFO [0m:      	  7: { 'alpha_mean': '2.5207e-01',
+[92mINFO [0m:      	       'contribution_ratio': '1.1891e-01',
+[92mINFO [0m:      	       'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	       'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	       'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'train_loss': '2.3564e+00'},
+[92mINFO [0m:      	  8: { 'alpha_mean': '2.5213e-01',
+[92mINFO [0m:      	       'contribution_ratio': '1.2832e-01',
+[92mINFO [0m:      	       'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	       'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	       'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'train_loss': '2.2551e+00'},
+[92mINFO [0m:      	  9: { 'alpha_mean': '2.5215e-01',
+[92mINFO [0m:      	       'contribution_ratio': '1.3833e-01',
+[92mINFO [0m:      	       'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	       'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	       'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'train_loss': '2.2213e+00'},
+[92mINFO [0m:      	  10: { 'alpha_mean': '2.5211e-01',
+[92mINFO [0m:      	        'contribution_ratio': '1.4325e-01',
+[92mINFO [0m:      	        'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	        'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	        'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'train_loss': '2.1467e+00'},
+[92mINFO [0m:      	  11: { 'alpha_mean': '2.5205e-01',
+[92mINFO [0m:      	        'contribution_ratio': '1.4412e-01',
+[92mINFO [0m:      	        'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	        'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	        'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'train_loss': '2.0501e+00'},
+[92mINFO [0m:      	  12: { 'alpha_mean': '2.5193e-01',
+[92mINFO [0m:      	        'contribution_ratio': '1.4263e-01',
+[92mINFO [0m:      	        'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	        'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	        'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'train_loss': '1.9533e+00'},
+[92mINFO [0m:      	  13: { 'alpha_mean': '2.5178e-01',
+[92mINFO [0m:      	        'contribution_ratio': '1.3834e-01',
+[92mINFO [0m:      	        'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	        'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	        'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'train_loss': '1.8717e+00'},
+[92mINFO [0m:      	  14: { 'alpha_mean': '2.5164e-01',
+[92mINFO [0m:      	        'contribution_ratio': '1.3705e-01',
+[92mINFO [0m:      	        'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	        'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	        'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'train_loss': '1.8282e+00'},
+[92mINFO [0m:      	  15: { 'alpha_mean': '2.5147e-01',
+[92mINFO [0m:      	        'contribution_ratio': '1.2906e-01',
+[92mINFO [0m:      	        'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	        'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	        'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'train_loss': '1.7525e+00'},
+[92mINFO [0m:      	  16: { 'alpha_mean': '2.5130e-01',
+[92mINFO [0m:      	        'contribution_ratio': '1.2747e-01',
+[92mINFO [0m:      	        'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	        'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	        'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'train_loss': '1.6985e+00'},
+[92mINFO [0m:      	  17: { 'alpha_mean': '2.5113e-01',
+[92mINFO [0m:      	        'contribution_ratio': '1.2640e-01',
+[92mINFO [0m:      	        'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	        'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	        'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'train_loss': '1.6479e+00'},
+[92mINFO [0m:      	  18: { 'alpha_mean': '2.5103e-01',
+[92mINFO [0m:      	        'contribution_ratio': '1.2561e-01',
+[92mINFO [0m:      	        'expanded_depth': '0.0000e+00',
+[92mINFO [0m:      	        'expanded_width': '0.0000e+00',
+[92mINFO [0m:      	        'expansion_g': '0.0000e+00',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'train_loss': '1.6131e+00'}}
+[92mINFO [0m:      	
+[92mINFO [0m:      	Aggregated ClientApp-side Evaluate Metrics:
+[92mINFO [0m:      	{ 1: {'eval_acc': '4.3764e-02', 'eval_loss': '3.2946e+00'},
+[92mINFO [0m:      	  2: {'eval_acc': '5.4705e-02', 'eval_loss': '3.2902e+00'},
+[92mINFO [0m:      	  3: {'eval_acc': '7.2210e-02', 'eval_loss': '3.2804e+00'},
+[92mINFO [0m:      	  4: {'eval_acc': '8.7527e-02', 'eval_loss': '3.1853e+00'},
+[92mINFO [0m:      	  5: {'eval_acc': '1.2910e-01', 'eval_loss': '3.0187e+00'},
+[92mINFO [0m:      	  6: {'eval_acc': '1.6849e-01', 'eval_loss': '2.6904e+00'},
+[92mINFO [0m:      	  7: {'eval_acc': '2.2101e-01', 'eval_loss': '2.5896e+00'},
+[92mINFO [0m:      	  8: {'eval_acc': '2.1882e-01', 'eval_loss': '2.5450e+00'},
+[92mINFO [0m:      	  9: {'eval_acc': '2.4070e-01', 'eval_loss': '2.4854e+00'},
+[92mINFO [0m:      	  10: {'eval_acc': '2.4289e-01', 'eval_loss': '2.4304e+00'},
+[92mINFO [0m:      	  11: {'eval_acc': '2.6258e-01', 'eval_loss': '2.3639e+00'},
+[92mINFO [0m:      	  12: {'eval_acc': '2.7352e-01', 'eval_loss': '2.2674e+00'},
+[92mINFO [0m:      	  13: {'eval_acc': '2.5602e-01', 'eval_loss': '2.2857e+00'},
+[92mINFO [0m:      	  14: {'eval_acc': '3.0197e-01', 'eval_loss': '2.1730e+00'},
+[92mINFO [0m:      	  15: {'eval_acc': '2.8665e-01', 'eval_loss': '2.1756e+00'},
+[92mINFO [0m:      	  16: {'eval_acc': '2.9759e-01', 'eval_loss': '2.1258e+00'},
+[92mINFO [0m:      	  17: {'eval_acc': '2.9322e-01', 'eval_loss': '2.1257e+00'},
+[92mINFO [0m:      	  18: {'eval_acc': '3.1291e-01', 'eval_loss': '2.0385e+00'}}
+[92mINFO [0m:      	
+[92mINFO [0m:      	ServerApp-side Evaluate Metrics:
+[92mINFO [0m:      	{ 1: { 'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'num_classes_seen': '9',
+[92mINFO [0m:      	       'server_eval_acc': '0.0000e+00',
+[92mINFO [0m:      	       'server_eval_loss': '3.2943e+00'},
+[92mINFO [0m:      	  2: { 'avg_forgetting': '0.0000e+00',
+[92mINFO [0m:      	       'bwt': '1.1111e-01',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'num_classes_seen': '9',
+[92mINFO [0m:      	       'server_eval_acc': '1.0737e-01',
+[92mINFO [0m:      	       'server_eval_loss': '3.2807e+00',
+[92mINFO [0m:      	       'worst_class_bwt': '0.0000e+00',
+[92mINFO [0m:      	       'worst_class_bwt_id': '3',
+[92mINFO [0m:      	       'worst_class_forgetting': '0.0000e+00',
+[92mINFO [0m:      	       'worst_class_forgetting_id': '3'},
+[92mINFO [0m:      	  3: { 'avg_forgetting': '1.1111e-01',
+[92mINFO [0m:      	       'bwt': '1.1111e-01',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'num_classes_seen': '9',
+[92mINFO [0m:      	       'server_eval_acc': '1.2211e-01',
+[92mINFO [0m:      	       'server_eval_loss': '3.2203e+00',
+[92mINFO [0m:      	       'worst_class_bwt': '0.0000e+00',
+[92mINFO [0m:      	       'worst_class_bwt_id': '3',
+[92mINFO [0m:      	       'worst_class_forgetting': '1.0000e+00',
+[92mINFO [0m:      	       'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  4: { 'avg_forgetting': '9.4809e-02',
+[92mINFO [0m:      	       'bwt': '1.2741e-01',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'num_classes_seen': '9',
+[92mINFO [0m:      	       'server_eval_acc': '1.3684e-01',
+[92mINFO [0m:      	       'server_eval_loss': '3.2192e+00',
+[92mINFO [0m:      	       'worst_class_bwt': '0.0000e+00',
+[92mINFO [0m:      	       'worst_class_bwt_id': '3',
+[92mINFO [0m:      	       'worst_class_forgetting': '7.8431e-01',
+[92mINFO [0m:      	       'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  5: { 'avg_forgetting': '9.7588e-02',
+[92mINFO [0m:      	       'bwt': '1.3028e-01',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'num_classes_seen': '9',
+[92mINFO [0m:      	       'server_eval_acc': '1.3895e-01',
+[92mINFO [0m:      	       'server_eval_loss': '3.1322e+00',
+[92mINFO [0m:      	       'worst_class_bwt': '0.0000e+00',
+[92mINFO [0m:      	       'worst_class_bwt_id': '6',
+[92mINFO [0m:      	       'worst_class_forgetting': '7.0588e-01',
+[92mINFO [0m:      	       'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  6: { 'avg_forgetting': '1.1221e-01',
+[92mINFO [0m:      	       'bwt': '1.1792e-01',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'num_classes_seen': '9',
+[92mINFO [0m:      	       'server_eval_acc': '1.2632e-01',
+[92mINFO [0m:      	       'server_eval_loss': '3.0768e+00',
+[92mINFO [0m:      	       'worst_class_bwt': '0.0000e+00',
+[92mINFO [0m:      	       'worst_class_bwt_id': '3',
+[92mINFO [0m:      	       'worst_class_forgetting': '8.0392e-01',
+[92mINFO [0m:      	       'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  7: { 'avg_forgetting': '1.1231e-01',
+[92mINFO [0m:      	       'bwt': '1.3855e-01',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'num_classes_seen': '18',
+[92mINFO [0m:      	       'server_eval_acc': '7.7512e-02',
+[92mINFO [0m:      	       'server_eval_loss': '3.1875e+00',
+[92mINFO [0m:      	       'worst_class_bwt': '0.0000e+00',
+[92mINFO [0m:      	       'worst_class_bwt_id': '6',
+[92mINFO [0m:      	       'worst_class_forgetting': '8.0392e-01',
+[92mINFO [0m:      	       'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  8: { 'avg_forgetting': '4.9667e-02',
+[92mINFO [0m:      	       'bwt': '7.8853e-02',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'num_classes_seen': '18',
+[92mINFO [0m:      	       'server_eval_acc': '8.6124e-02',
+[92mINFO [0m:      	       'server_eval_loss': '3.1419e+00',
+[92mINFO [0m:      	       'worst_class_bwt': '-2.8169e-02',
+[92mINFO [0m:      	       'worst_class_bwt_id': '16',
+[92mINFO [0m:      	       'worst_class_forgetting': '7.2549e-01',
+[92mINFO [0m:      	       'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  9: { 'avg_forgetting': '6.0986e-02',
+[92mINFO [0m:      	       'bwt': '8.0845e-02',
+[92mINFO [0m:      	       'incorp_accepted': '0',
+[92mINFO [0m:      	       'incorp_active_adapters': '0',
+[92mINFO [0m:      	       'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	       'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	       'incorp_confirmed': '0',
+[92mINFO [0m:      	       'incorp_monitoring': '0',
+[92mINFO [0m:      	       'incorp_rejected': '0',
+[92mINFO [0m:      	       'incorp_reverted': '0',
+[92mINFO [0m:      	       'num_classes_seen': '18',
+[92mINFO [0m:      	       'server_eval_acc': '8.9952e-02',
+[92mINFO [0m:      	       'server_eval_loss': '3.1060e+00',
+[92mINFO [0m:      	       'worst_class_bwt': '-1.6667e-02',
+[92mINFO [0m:      	       'worst_class_bwt_id': '17',
+[92mINFO [0m:      	       'worst_class_forgetting': '6.8627e-01',
+[92mINFO [0m:      	       'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  10: { 'avg_forgetting': '5.7502e-02',
+[92mINFO [0m:      	        'bwt': '9.9996e-02',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'num_classes_seen': '18',
+[92mINFO [0m:      	        'server_eval_acc': '1.0813e-01',
+[92mINFO [0m:      	        'server_eval_loss': '3.0546e+00',
+[92mINFO [0m:      	        'worst_class_bwt': '0.0000e+00',
+[92mINFO [0m:      	        'worst_class_bwt_id': '6',
+[92mINFO [0m:      	        'worst_class_forgetting': '6.2745e-01',
+[92mINFO [0m:      	        'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  11: { 'avg_forgetting': '6.9293e-02',
+[92mINFO [0m:      	        'bwt': '1.0070e-01',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'num_classes_seen': '18',
+[92mINFO [0m:      	        'server_eval_acc': '1.0909e-01',
+[92mINFO [0m:      	        'server_eval_loss': '3.0974e+00',
+[92mINFO [0m:      	        'worst_class_bwt': '-7.0423e-02',
+[92mINFO [0m:      	        'worst_class_bwt_id': '16',
+[92mINFO [0m:      	        'worst_class_forgetting': '7.2549e-01',
+[92mINFO [0m:      	        'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  12: { 'avg_forgetting': '6.6712e-02',
+[92mINFO [0m:      	        'bwt': '1.1641e-01',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'num_classes_seen': '18',
+[92mINFO [0m:      	        'server_eval_acc': '1.2536e-01',
+[92mINFO [0m:      	        'server_eval_loss': '2.9701e+00',
+[92mINFO [0m:      	        'worst_class_bwt': '-7.0423e-02',
+[92mINFO [0m:      	        'worst_class_bwt_id': '16',
+[92mINFO [0m:      	        'worst_class_forgetting': '7.6471e-01',
+[92mINFO [0m:      	        'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  13: { 'avg_forgetting': '8.6654e-02',
+[92mINFO [0m:      	        'bwt': '1.0210e-01',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'num_classes_seen': '27',
+[92mINFO [0m:      	        'server_eval_acc': '1.5913e-01',
+[92mINFO [0m:      	        'server_eval_loss': '2.9030e+00',
+[92mINFO [0m:      	        'worst_class_bwt': '-7.0423e-02',
+[92mINFO [0m:      	        'worst_class_bwt_id': '16',
+[92mINFO [0m:      	        'worst_class_forgetting': '8.6275e-01',
+[92mINFO [0m:      	        'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  14: { 'avg_forgetting': '5.5080e-02',
+[92mINFO [0m:      	        'bwt': '1.1375e-01',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'num_classes_seen': '27',
+[92mINFO [0m:      	        'server_eval_acc': '2.0310e-01',
+[92mINFO [0m:      	        'server_eval_loss': '2.8396e+00',
+[92mINFO [0m:      	        'worst_class_bwt': '-6.2500e-02',
+[92mINFO [0m:      	        'worst_class_bwt_id': '24',
+[92mINFO [0m:      	        'worst_class_forgetting': '7.8431e-01',
+[92mINFO [0m:      	        'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  15: { 'avg_forgetting': '8.1073e-02',
+[92mINFO [0m:      	        'bwt': '1.0266e-01',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'num_classes_seen': '27',
+[92mINFO [0m:      	        'server_eval_acc': '1.9443e-01',
+[92mINFO [0m:      	        'server_eval_loss': '2.8575e+00',
+[92mINFO [0m:      	        'worst_class_bwt': '-1.7391e-01',
+[92mINFO [0m:      	        'worst_class_bwt_id': '23',
+[92mINFO [0m:      	        'worst_class_forgetting': '8.0392e-01',
+[92mINFO [0m:      	        'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  16: { 'avg_forgetting': '8.4420e-02',
+[92mINFO [0m:      	        'bwt': '1.1841e-01',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'num_classes_seen': '27',
+[92mINFO [0m:      	        'server_eval_acc': '2.0867e-01',
+[92mINFO [0m:      	        'server_eval_loss': '2.8327e+00',
+[92mINFO [0m:      	        'worst_class_bwt': '-6.1728e-02',
+[92mINFO [0m:      	        'worst_class_bwt_id': '25',
+[92mINFO [0m:      	        'worst_class_forgetting': '9.2157e-01',
+[92mINFO [0m:      	        'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  17: { 'avg_forgetting': '8.9857e-02',
+[92mINFO [0m:      	        'bwt': '1.2107e-01',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'num_classes_seen': '27',
+[92mINFO [0m:      	        'server_eval_acc': '2.1300e-01',
+[92mINFO [0m:      	        'server_eval_loss': '2.8336e+00',
+[92mINFO [0m:      	        'worst_class_bwt': '-7.0423e-02',
+[92mINFO [0m:      	        'worst_class_bwt_id': '16',
+[92mINFO [0m:      	        'worst_class_forgetting': '7.8431e-01',
+[92mINFO [0m:      	        'worst_class_forgetting_id': '2'},
+[92mINFO [0m:      	  18: { 'avg_forgetting': '9.9678e-02',
+[92mINFO [0m:      	        'bwt': '1.2809e-01',
+[92mINFO [0m:      	        'incorp_accepted': '0',
+[92mINFO [0m:      	        'incorp_active_adapters': '0',
+[92mINFO [0m:      	        'incorp_candidacies_proposed': '0',
+[92mINFO [0m:      	        'incorp_candidacy_pending': '0',
+[92mINFO [0m:      	        'incorp_confirmed': '0',
+[92mINFO [0m:      	        'incorp_monitoring': '0',
+[92mINFO [0m:      	        'incorp_rejected': '0',
+[92mINFO [0m:      	        'incorp_reverted': '0',
+[92mINFO [0m:      	        'num_classes_seen': '27',
+[92mINFO [0m:      	        'server_eval_acc': '2.2105e-01',
+[92mINFO [0m:      	        'server_eval_loss': '2.7990e+00',
+[92mINFO [0m:      	        'worst_class_bwt': '-7.4074e-02',
+[92mINFO [0m:      	        'worst_class_bwt_id': '25',
+[92mINFO [0m:      	        'worst_class_forgetting': '8.2353e-01',
+[92mINFO [0m:      	        'worst_class_forgetting_id': '2'}}
+[92mINFO [0m:      
+Training completed.
+[36m(pid=gcs_server)[0m [2026-09-14 19:30:08,547 E 999549 999549] (gcs_server) gcs_server.cc:302: Failed to establish connection to the event+metrics exporter agent. Events and metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+[36m(ClientAppActor pid=1001661)[0m /workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/torch/nn/modules/rnn.py:1169: UserWarning: RNN module weights are not part of single contiguous chunk of memory. This means they need to be compacted at every call, possibly greatly increasing memory usage. To compact weights again call flatten_parameters(). (Triggered internally at /pytorch/aten/src/ATen/native/cudnn/RNN.cpp:1479.)
+[36m(ClientAppActor pid=1001661)[0m   result = _VF.lstm(
+[92mINFO [0m:      
+
+[92mINFO [0m:      Starting logstream for run_id `16247744426019329148`
