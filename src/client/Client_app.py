@@ -1,5 +1,6 @@
 import pickle
 import io
+import random
 from flwr.app import (
     ArrayRecord,
     ConfigRecord,
@@ -9,13 +10,20 @@ from flwr.app import (
     RecordDict,
 )
 from flwr.clientapp import ClientApp
+import numpy as np
 import torch
 from src.client.CandidacyCriterion import CandidacyCriterion
 from src.client.ExpansionCriterion import ExpansionCriterion
 from src.model.Models import FCLModel
 from src.model.blocks.Adapter import promote_to_incorporated
 from src.model.layers.PrototypeMemory import PrototypeMemory
-from .ClientTask import train_fn, test_fn, compute_expansion_signal, vote_on_candidate
+from .ClientTask import (
+    compute_local_contribution_ratio,
+    train_fn,
+    test_fn,
+    compute_expansion_signal,
+    vote_on_candidate,
+)
 from ..utils.data.utd_mahd_dataset import (
     load_data,
     parse_int_list_config,
@@ -30,6 +38,17 @@ _LOCAL_STATE_KEY = "local_modules"
 _CANDIDACY_STATE_KEY = "candidacy_state"
 _PROMOTED_CHECKPOINT_KEY = "promoted_local_checkpoint"
 _VOTE_ADAPT_CHECKPOINT_KEY = "vote_adapt_checkpoint"
+
+
+def _seed_everything(base_seed: int, partition_id: int, current_round: int) -> None:
+    local_seed = (base_seed * 1_000_003 + partition_id * 9_973 + current_round) % (
+        2**31 - 1
+    )
+    random.seed(local_seed)
+    np.random.seed(local_seed % (2**32 - 1))
+    torch.manual_seed(local_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(local_seed)
 
 
 def _build_model(context: Context) -> FCLModel:
@@ -205,6 +224,7 @@ def _load_client_data(msg: Message, context: Context):
             dirichlet_mode=dirichlet_mode,
             held_out_subjects=held_out_subjects,
             partition_mode=str(context.run_config.get("partition-mode", "subject")),
+            seed=int(context.run_config.get("seed", 0)),
         ),
         partition_id,
     )
@@ -215,6 +235,9 @@ def train(msg: Message, context: Context) -> Message:
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     partition_id = int(context.node_config["partition-id"])
     config = msg.content["config"]
+    current_round = int(config.get("server_round", 1))
+    base_seed = int(context.run_config.get("seed", 0))
+    _seed_everything(base_seed, partition_id, current_round)
 
     model = _build_model(context)
     model.to(device)
@@ -234,7 +257,17 @@ def train(msg: Message, context: Context) -> Message:
     if len(train_loader.dataset) == 0:
         _save_candidacy_criterion(context, candidacy_criterion)
         arrays_reply = ArrayRecord(model.get_global_arrays())
-        metrics_reply = MetricRecord({"train_loss": 0.0, "num-examples": 0})
+        metrics_reply = MetricRecord(
+            {
+                "train_loss": 0.0,
+                "num-examples": 0,
+                "expanded_width": 0,
+                "expanded_depth": 0,
+                "expansion_g": 0.0,
+                "alpha_mean": 0.0,
+                "contribution_ratio": 0.0,
+            }
+        )
         config_reply = ConfigRecord({"proto_stats": pickle.dumps((None, None, []))})
 
         content = RecordDict(
@@ -259,6 +292,7 @@ def train(msg: Message, context: Context) -> Message:
         if required_num_classes > model.classifier.num_classes:
             model.classifier._expand(required_num_classes)
 
+    expanded_width, expanded_depth, expansion_g = 0, 0, 0.0
     if model.classifier.num_classes > 0:
         signal = compute_expansion_signal(
             model,
@@ -271,6 +305,7 @@ def train(msg: Message, context: Context) -> Message:
         if signal is not None:
             criterion = ExpansionCriterion(theta_exp=context.run_config["theta-exp"])
             result = criterion.compute(**signal)
+            expansion_g = float(result["g"])
 
             kind = criterion.step(
                 model.adapter_local, result["g"], g_reduced_below_threshold=False
@@ -279,6 +314,8 @@ def train(msg: Message, context: Context) -> Message:
                 print(
                     f"[client {partition_id} expands in {kind} mode (g={result['g']:.4f})]"
                 )
+                expanded_width = int(kind == "width")
+                expanded_depth = int(kind == "depth")
 
     memory = PrototypeMemory(
         embedding_dim=int(context.run_config["hidden-dim"]),
@@ -308,7 +345,10 @@ def train(msg: Message, context: Context) -> Message:
     config_reply_data = {"proto_stats": pickle.dumps((sum_h, counts, class_ids))}
 
     alpha_mean = model.alpha_gate.mean_alpha()
-    should_propose = candidacy_criterion.step(alpha_mean, local_acc=None)
+    contribution_ratio = compute_local_contribution_ratio(model, train_loader, device)
+    should_propose = candidacy_criterion.step(
+        contribution_ratio if contribution_ratio is not None else 0.0, local_acc=None
+    )
     if should_propose and not config.get("candidacy_locked", False):
         candidate = promote_to_incorporated(model.adapter_local, model.alpha_gate)
         buffer = io.BytesIO()
@@ -318,14 +358,24 @@ def train(msg: Message, context: Context) -> Message:
         config_reply_data["candidate_partition_id"] = partition_id
         print(
             f"[client {partition_id} proposes incorporation"
-            f"(alpha_mean={alpha_mean:.4f})]"
+            f"(contribution_ratio={contribution_ratio:.4f}, alpha_mean={alpha_mean:.4f})]"
         )
 
     _save_candidacy_criterion(context, candidacy_criterion)
 
     arrays_reply = ArrayRecord(model.get_global_arrays())
     metrics_reply = MetricRecord(
-        {"train_loss": train_loss, "num-examples": len(train_loader.dataset)}
+        {
+            "train_loss": train_loss,
+            "num-examples": len(train_loader.dataset),
+            "expanded_width": expanded_width,
+            "expanded_depth": expanded_depth,
+            "expansion_g": expansion_g,
+            "alpha_mean": alpha_mean,
+            "contribution_ratio": (
+                contribution_ratio if contribution_ratio is not None else 0.0
+            ),
+        }
     )
     config_reply = ConfigRecord(config_reply_data)
     content = RecordDict(
@@ -407,6 +457,10 @@ def _handle_vote_round(
 def evaluate(msg: Message, context: Context) -> Message:
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     config = msg.content["config"]
+    partition_id = int(context.node_config["partition-id"])
+    current_round = int(config.get("server_round", 1))
+    base_seed = int(context.run_config.get("seed", 0))
+    _seed_everything(base_seed, partition_id, current_round)
 
     model = _build_model(context)
     model.to(device)

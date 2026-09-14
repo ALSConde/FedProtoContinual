@@ -143,6 +143,16 @@ class FCLModel(nn.Module):
         x_local, _ = self.embed_both(x)
         return x_local
 
+    def local_contribution_ratio(self, x: torch.Tensor) -> torch.Tensor:
+        feats = self.feature_extractor(x)
+        x_global = self.adapter_global(feats)
+        incorporated = self.incorporated_delta(x_global)
+        x_shared = x_global + incorporated
+        delta_local = self.adapter_local.forward_delta(x_global)
+        alpha = self.alpha_gate.alpha_vector()
+        scaled_local = alpha * delta_local
+        return scaled_local.norm(dim=-1) / (x_shared.norm(dim=-1) + 1e-8)
+
     def frozen_global_embed_fn(self) -> Callable[[torch.Tensor], torch.Tensor]:
         frozen_fe = copy.deepcopy(self.feature_extractor)
         frozen_ag = copy.deepcopy(self.adapter_global)

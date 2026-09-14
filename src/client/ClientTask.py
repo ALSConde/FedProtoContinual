@@ -260,6 +260,22 @@ def test_fn(model: FCLModel, valloader: DataLoader, device: torch.device):
     return loss_sum / max(n_batches, 1), correct / total
 
 
+def compute_local_contribution_ratio(
+    model: FCLModel, loader: DataLoader, device: torch.device
+) -> Optional[float]:
+    model.eval()
+    total_ratio, total_n = 0.0, 0
+    with torch.no_grad():
+        for x, _ in loader:
+            x = x.to(device)
+            ratios = model.local_contribution_ratio(x)
+            total_ratio += ratios.sum().item()
+            total_n += ratios.numel()
+    if total_n == 0:
+        return None
+    return total_ratio / total_n
+
+
 def compute_expansion_signal(
     model: FCLModel,
     loader: DataLoader,

@@ -40,5 +40,6 @@ def main() -> None:
     print(f"exec:", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
+
 if __name__ == "__main__":
     main()
