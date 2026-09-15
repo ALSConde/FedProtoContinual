@@ -226,7 +226,7 @@ def vote_on_candidate(
     adapt_steps: int,
     vote_margin: float,
 ) -> tuple[float, float, float]:
-    _, acc_before = evaluate_with_candidate(model, candidate, val_loader, device)
+    _, acc_before = evaluate_with_candidate(model, None, val_loader, device)
     short_local_adaptation(
         model, candidate, train_loader, lr=lr, device=device, max_steps=adapt_steps
     )
@@ -299,7 +299,7 @@ def compute_expansion_signal(
                 h_new_list.append(h[~cons_mask])
                 y_new_list.append(y[~cons_mask])
 
-        if not h_cons_list or not h_new_list:
+        if not h_cons_list and not h_new_list:
             return None
 
         h_cons = torch.cat(h_cons_list) if h_cons_list else None
