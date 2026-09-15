@@ -140,14 +140,16 @@ def main(grid: Grid, context: Context) -> None:
                     max(current_round, 1), rounds_per_step_for_eval, schedule
                 )
 
-            loss, acc, per_class_acc = evaluate_global_model(
+            loss, acc, per_class_acc, per_class_n = evaluate_global_model(
                 eval_model, server_test_loader, device, allowed_classes
             )
 
             metrics = {"server_eval_loss": loss, "server_eval_acc": acc}
 
             if schedule is not None:
-                report = forgetting_monitor.update(current_round, per_class_acc)
+                report = forgetting_monitor.update(
+                    current_round, per_class_acc, per_class_n=per_class_n
+                )
                 if report["mean_bwt"] is not None:
                     metrics["bwt"] = report["mean_bwt"]
                 if report["mean_forgetting"] is not None:

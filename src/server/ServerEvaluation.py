@@ -66,7 +66,7 @@ class ContinualMetricsTracker:
 
 
 class ForgettingMonitor:
-    _FIELDNAMES = ["round", "class_id", "acc", "bwt", "forgetting"]
+    _FIELDNAMES = ["round", "class_id", "n", "acc", "bwt", "forgetting"]
 
     def __init__(
         self, output_dir: str, tracker: Optional[ContinualMetricsTracker] = None
@@ -80,8 +80,14 @@ class ForgettingMonitor:
         )
         self.last_summary: dict = {}
 
-    def update(self, current_round: int, per_class_acc: dict[int, float]) -> dict:
+    def update(
+        self,
+        current_round: int,
+        per_class_acc: dict[int, float],
+        per_class_n: Optional[dict[int, int]] = None,
+    ) -> dict:
         self.tracker.update(current_round, per_class_acc)
+        per_class_n = per_class_n or {}
 
         per_class_bwt = self.tracker.per_class_backward_transfer(current_round)
         per_class_forgetting = self.tracker.per_class_forgetting(current_round)
@@ -90,6 +96,7 @@ class ForgettingMonitor:
             {
                 "round": current_round,
                 "class_id": class_id,
+                "n": per_class_n.get(class_id, ""),
                 "acc": per_class_acc.get(class_id),
                 "bwt": per_class_bwt.get(class_id, ""),
                 "forgetting": per_class_forgetting.get(class_id, ""),
@@ -163,7 +170,7 @@ def evaluate_global_model(
     test_loader: DataLoader,
     device: torch.device,
     allowed_classes: Optional[set] = None,
-) -> tuple[float, float, dict[int, float]]:
+) -> tuple[float, float, dict[int, float], dict[int, int]]:
     model.eval()
     total_loss, total_correct, total_n = 0.0, 0, 0
     class_correct: dict[int, int] = {}
@@ -203,9 +210,9 @@ def evaluate_global_model(
             )
 
     if total_n == 0:
-        return 0.0, 0.0, {}
+        return 0.0, 0.0, {}, {}
 
     avg_loss = total_loss / total_n
     overall_acc = total_correct / total_n
     per_class_acc = {c: class_correct.get(c, 0) / class_total[c] for c in class_total}
-    return avg_loss, overall_acc, per_class_acc
+    return avg_loss, overall_acc, per_class_acc, dict(class_total)
