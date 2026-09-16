@@ -16,6 +16,7 @@ from src.client.CandidacyCriterion import CandidacyCriterion
 from src.client.ExpansionCriterion import ExpansionCriterion
 from src.model.Models import FCLModel
 from src.model.blocks.Adapter import promote_to_incorporated
+from src.model.layers import WDStats
 from src.model.layers.PrototypeMemory import PrototypeMemory
 from .ClientTask import (
     compute_local_contribution_ratio,
@@ -68,6 +69,13 @@ def _apply_incorporated_topology(model: FCLModel, config: ConfigRecord) -> None:
         model.load_incorporated_topology(topologies)
 
 
+def _reset_wd_stats(module: torch.nn.Module) -> None:
+    for m in module.modules():
+        stats = getattr(m, "stats", None)
+        if isinstance(stats, WDStats) and stats is not None:
+            stats.reset()
+
+
 def _load_local_state(context: Context, model: FCLModel, device: torch.device) -> set:
     if _LOCAL_STATE_KEY not in context.state:
         return set()
@@ -80,6 +88,7 @@ def _load_local_state(context: Context, model: FCLModel, device: torch.device) -
     model.adapter_local = bundle["adapter_local"].to(device)
     model.alpha_gate = bundle["alpha_gate"].to(device)
     model.classifier = bundle["classifier"].to(device)
+    _reset_wd_stats(model.adapter_local)
     return bundle["known_consolidated"]
 
 
