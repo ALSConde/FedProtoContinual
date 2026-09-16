@@ -16,7 +16,7 @@ from src.client.CandidacyCriterion import CandidacyCriterion
 from src.client.ExpansionCriterion import ExpansionCriterion
 from src.model.Models import FCLModel
 from src.model.blocks.Adapter import promote_to_incorporated
-from src.model.layers import WDStats
+from src.model.layers.WDStats import WDStats
 from src.model.layers.PrototypeMemory import PrototypeMemory
 from .ClientTask import (
     compute_local_contribution_ratio,
