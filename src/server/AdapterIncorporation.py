@@ -68,7 +68,7 @@ class AdapterIncorporationState:
         config["candidate_outcome_partition_id"] = (
             outcome["partition_id"] if outcome is not None else -1
         )
-        config["candidate_outcome_status"] = (
+        config["incorporation_outcome_status"] = (
             outcome["status"] if outcome is not None else "none"
         )
 

@@ -258,7 +258,7 @@ def _apply_class_schedule(
         num_classes_total if num_classes_total is not None else int(labels.max()) + 1
     )
     schedule = build_class_schedule(total_classes, classes_per_step)
-    allowed_classes = classes_seen_until_round(total_classes, rounds_per_step, schedule)
+    allowed_classes = classes_seen_until_round(current_round, rounds_per_step, schedule)
     labels_for_client = labels[client_indices]
     mask = np.isin(labels_for_client, list(allowed_classes))
     return client_indices[mask]
