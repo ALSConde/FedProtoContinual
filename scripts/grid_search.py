@@ -7,10 +7,19 @@ per-class forgetting/BWT monitor) to an isolated subdirectory under
 (written by Server_app.py) and builds a leaderboard sorted by the
 selected metric.
 
-By default, it searches over the three requested hyperparameters:
-    theta-alpha   (alpha_mean threshold for proposing incorporation)
+By default, it runs the "core" stage (the parameters that are always active,
+regardless of whether an expansion/incorporation is ever triggered):
     local-epochs  (local training epochs per round)
-    theta-exp     (threshold for the saturation/expansion criterion)
+    lambda-kd     (weight of the knowledge distillation term)
+    tau           (confidence scale of the adaptive EMA of the global prototypes;
+                   NOTE: prototype counts are accumulated on every epoch, so the
+                   effective count per class is ~ local-epochs * n_samples and
+                   tau interacts with local-epochs)
+
+The "structural" parameters are searched in a second stage, with the core
+parameters fixed at the best values of the first stage:
+    theta-exp     (threshold on the saturation indicator g -> triggers expansion)
+    theta-alpha   (threshold on the contribution ratio -> triggers candidacy)
 
 Other hyperparameters commonly tuned in the project (all of which are
 defined in [tool.flwr.app.config] in pyproject.toml and can be added via
@@ -37,11 +46,19 @@ Only preview which combinations would be executed, without running anything:
 
 Rank by lower average forgetting instead of higher accuracy:
     python scripts/grid_search.py --metric avg_forgetting --minimize
+
+Metrics available for --metric: every key in last_eval_metrics (server_eval_acc,
+avg_forgetting, bwt, ...) plus `avg_inc_acc` -- the mean, over the incremental
+steps, of the accuracy measured at the end of each step on all classes seen so
+far (computed from forgetting_per_class.csv). It is much less noisy than the
+last-round accuracy, so it is the default.
 """
 
 import argparse
+import csv
 import itertools
 import json
+import math
 from pathlib import Path
 import random
 import subprocess
@@ -51,12 +68,12 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_GRID: dict[str, list[Any]] = {
-    "theta-alpha": [0.1, 0.2, 0.3, 0.4, 0.5],
-    "local-epochs": [1, 3, 5, 7],
-    "theta-exp": [0.3, 0.4, 0.5],
+    "local-epochs": [3, 5, 7],
+    "lambda-kd": [0.0, 0.5, 1.0, 2.0, 4.0],
+    "tau": [15, 30, 60, 120, 250],
 }
 
-DEFAULT_METRIC = "server_eval_acc"
+DEFAULT_METRIC = "avg_inc_acc"
 
 # ------------------- #
 # Parsing helpers
@@ -114,6 +131,32 @@ def _build_run_config_string(overrides: dict[str, Any]) -> str:
 # ------------------- #
 
 
+def _summary_matches(summary_path: Path, overrides: dict[str, Any]) -> bool:
+    """"""
+    try:
+        cfg = json.loads(summary_path.read_text()).get("run_config", {})
+    except (json.JSONDecodeError, OSError):
+        return False
+    for key, wanted in overrides.items():
+        if key == "output-dir":
+            continue
+        if key not in cfg:
+            return False
+        got = cfg[key]
+        numeric = (int, float)
+        if (
+            isinstance(wanted, numeric)
+            and not isinstance(wanted, bool)
+            and isinstance(got, numeric)
+            and not isinstance(got, bool)
+        ):
+            if not math.isclose(float(got), float(wanted), rel_tol=1e-9, abs_tol=1e-12):
+                return False
+        elif str(got).lower() != str(wanted).lower():
+            return False
+    return True
+
+
 def _run_trial(
     trial_tag: str,
     params: dict[str, Any],
@@ -125,18 +168,31 @@ def _run_trial(
     trial_dir = results_dir / trial_tag
     summary_path = trial_dir / "summary.json"
 
-    row: dict[str, Any] = {"trial": trial_tag, **params, "trial_dir": str(trial_dir)}
+    row: dict[str, Any] = {
+        "trial": trial_tag,
+        **fixed_overrides,
+        **params,
+        "trial_dir": str(trial_dir),
+    }
+    overrides = {**fixed_overrides, **params, "output-dir": str(trial_dir)}
 
     if summary_path.exists() and not force_rerun:
+        if _summary_matches(summary_path, overrides):
+            print(
+                f"[{trial_tag}] summary.json already exists with the same config, "
+                "skipping trial. (use --force-rerun to redo trials)"
+            )
+            row.update(_extract_metrics(summary_path))
+            row["status"] = "cached"
+            return row
         print(
-            f"[{trial_tag}] summary.json already exists, skipping trial. (uses --force-rerun to redo trials)"
+            f"[{trial_tag}] summary.json exists but was produced with a different "
+            "config (trial index reused by another combination); re-running."
         )
-        row.update(_extract_metrics(summary_path))
-        row["status"] = "cached"
-        return row
 
     trial_dir.mkdir(parents=True, exist_ok=True)
-    overrides = {**fixed_overrides, **params, "output-dir": str(trial_dir)}
+    for stale in ("summary.json", "forgetting_per_class.csv"):
+        (trial_dir / stale).unlink(missing_ok=True)
     run_config_str = _build_run_config_string(overrides)
 
     print(f'[{trial_tag}] flwr run . --run-config "{run_config_str}"')
@@ -182,6 +238,38 @@ def _run_trial(
     return row
 
 
+def _avg_incremental_accuracy(trial_dir: Path, run_config: dict[str, Any]) -> Any:
+    """Mean over steps of the accuracy at the end of each step (all seen classes).
+
+    Uses forgetting_per_class.csv (per-round, per-class accuracy and support), so
+    the per-round accuracy is sum(n * acc) / sum(n) -- identical to server_eval_acc.
+    """
+    csv_path = trial_dir / "forgetting_per_class.csv"
+    classes_per_step = run_config.get("classes-per-step")
+    if not csv_path.exists() or not classes_per_step:
+        return None
+    rounds_per_step = int(run_config.get("rounds-per-step", 1))
+    total_classes = int(run_config.get("num-classes-total", 27))
+    n_steps = math.ceil(total_classes / classes_per_step)
+    step_end_rounds = {rounds_per_step * (i + 1) for i in range(n_steps)}
+
+    hits: dict[int, float] = {}
+    support: dict[int, float] = {}
+    with csv_path.open(newline="") as f:
+        for r in csv.DictReader(f):
+            rnd = int(r["round"])
+            if (
+                rnd not in step_end_rounds
+                or r["n"] in ("", None)
+                or r["acc"] in ("", None)
+            ):
+                continue
+            hits[rnd] = hits.get(rnd, 0.0) + float(r["n"]) * float(r["acc"])
+            support[rnd] = support.get(rnd, 0.0) + float(r["n"])
+    accs = [hits[k] / support[k] for k in sorted(support) if support[k] > 0]
+    return sum(accs) / len(accs) if accs else None
+
+
 def _extract_metrics(summary_path: Path) -> dict[str, Any]:
     try:
         summary = json.loads(summary_path.read_text())
@@ -190,6 +278,9 @@ def _extract_metrics(summary_path: Path) -> dict[str, Any]:
 
     last_eval = summary.get("last_eval_metrics") or {}
     return {
+        "avg_inc_acc": _avg_incremental_accuracy(
+            summary_path.parent, summary.get("run_config") or {}
+        ),
         "round": last_eval.get("round"),
         "server_eval_acc": last_eval.get("server_eval_acc"),
         "server_eval_loss": last_eval.get("server_eval_loss"),
@@ -418,6 +509,7 @@ def main() -> None:
             "trial",
             *names,
             args.metric,
+            "avg_inc_acc",
             "server_eval_acc",
             "avg_forgetting",
             "bwt",

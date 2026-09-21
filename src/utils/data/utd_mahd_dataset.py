@@ -264,7 +264,7 @@ def _apply_class_schedule(
     return client_indices[mask]
 
 
-def _apply_class_retetion(
+def _apply_class_retention(
     client_indices: np.ndarray,
     all_labels: np.ndarray,
     num_classes_total: int,
@@ -353,7 +353,7 @@ def load_data(
             else seed + partition_id
         )
         if len(client_indices) > 0:
-            client_indices = _apply_class_retetion(
+            client_indices = _apply_class_retention(
                 client_indices,
                 dataset.labels,
                 total_classes,

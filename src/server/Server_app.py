@@ -1,5 +1,4 @@
 import random
-
 from flwr.app import ArrayRecord, ConfigRecord, Context, MetricRecord
 from flwr.serverapp import Grid, ServerApp
 import numpy as np
@@ -75,7 +74,7 @@ def main(grid: Grid, context: Context) -> None:
 
     strategy = FedProxStrategy(
         embedding_dim=hidden_dim,
-        tau=15,
+        tau=float(context.run_config.get("tau", 15.0)),
         fraction_evaluate=fraction_evaluate,
         proximal_mu=0.01,
         a_max=a_max,
