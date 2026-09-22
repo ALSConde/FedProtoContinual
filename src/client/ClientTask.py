@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, random_split, DataLoader
 import torch.nn.functional as F
 from src.model.Models import FCLModel
+from src.model.blocks.Adapter import Adapter
 from src.model.layers.PrototypeMemory import PrototypeMemory
 from src.utils.losses.Losses import (
     distillation_loss,
@@ -126,7 +127,7 @@ def train_fn(
 
 
 def embed_with_extra_incorporated(
-    model: FCLModel, x: torch.Tensor, extra_adapter: Optional[nn.Module] = None
+    model: FCLModel, x: torch.Tensor, extra_adapter: Optional[Adapter] = None
 ):
     feats = model.feature_extractor(x)
     x_global = model.adapter_global(feats)
@@ -142,7 +143,7 @@ def embed_with_extra_incorporated(
 
 def evaluate_with_candidate(
     model: FCLModel,
-    candidate: Optional[nn.Module],
+    candidate: Optional[Adapter],
     loader: DataLoader,
     device: torch.device,
 ):
@@ -169,7 +170,7 @@ def evaluate_with_candidate(
 
 def short_local_adaptation(
     model: FCLModel,
-    candidate: nn.Module,
+    candidate: Adapter,
     adapt_loader: DataLoader,
     lr: float,
     device: torch.device,
@@ -218,7 +219,7 @@ def short_local_adaptation(
 
 def vote_on_candidate(
     model: FCLModel,
-    candidate: nn.Module,
+    candidate: Adapter,
     train_loader: DataLoader,
     val_loader: DataLoader,
     device: torch.device,

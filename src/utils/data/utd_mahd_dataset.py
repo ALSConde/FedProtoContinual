@@ -180,18 +180,31 @@ def build_class_schedule(
     ]
 
 
-def classes_seen_until_round(
+def current_step_index(
     current_round: int, rounds_per_step: int, schedule: list[list[int]]
-) -> set[int]:
+) -> int:
     if rounds_per_step <= 0:
         raise ValueError("rounds_per_step must be a positive integer.")
     step_idx = (max(current_round, 1) - 1) // rounds_per_step
-    step_idx = min(step_idx, len(schedule) - 1)
+    return min(step_idx, len(schedule) - 1)
+
+
+def classes_seen_until_round(
+    current_round: int, rounds_per_step: int, schedule: list[list[int]]
+) -> set[int]:
+    step_idx = current_step_index(current_round, rounds_per_step, schedule)
 
     seen: set[int] = set()
     for step_classes in schedule[: step_idx + 1]:
         seen.update(step_classes)
     return seen
+
+
+def classes_in_current_step(
+    current_round: int, rounds_per_step: int, schedule: list[list[int]]
+) -> set[int]:
+    step_idx = current_step_index(current_round, rounds_per_step, schedule)
+    return set(schedule[step_idx])
 
 
 def dirichlet_partition_across_clients(
@@ -258,7 +271,7 @@ def _apply_class_schedule(
         num_classes_total if num_classes_total is not None else int(labels.max()) + 1
     )
     schedule = build_class_schedule(total_classes, classes_per_step)
-    allowed_classes = classes_seen_until_round(current_round, rounds_per_step, schedule)
+    allowed_classes = classes_in_current_step(current_round, rounds_per_step, schedule)
     labels_for_client = labels[client_indices]
     mask = np.isin(labels_for_client, list(allowed_classes))
     return client_indices[mask]

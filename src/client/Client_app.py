@@ -64,7 +64,7 @@ def _build_model(context: Context) -> FCLModel:
 
 
 def _apply_incorporated_topology(model: FCLModel, config: ConfigRecord) -> None:
-    if "incorporated_topology" in config:
+    if "incorporated_topologies" in config:
         topologies = pickle.loads(config["incorporated_topologies"])
         model.load_incorporated_topology(topologies)
 
