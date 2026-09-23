@@ -1,0 +1,161 @@
+🎊 Successfully started run 6334031027211678237
+[92mINFO [0m:      Starting Flower Simulation
+Successfully installed FedProtoContinual to /root/.flwr/apps/ALSConde.FedProtoContinual.0.0.4.39f9d8e0.
+training-scenario='class-incremental': introducing 9 new classes every 10 round(s) over 90 rounds. dirichlet-mode='static' (forced static under class-incremental).
+Centralized evaluation enabled on held-out subjects [6, 7, 8] with (1615 samples).
+[92mINFO [0m:      Starting FedProxStrategy strategy:
+[92mINFO [0m:      	├── Number of rounds: 90
+[92mINFO [0m:      	├── ArrayRecord (0.44 MB)
+[92mINFO [0m:      	├── ConfigRecord (train): {'lr': 0.001, 'batch-size': 32, 'incorp_status': true}
+[92mINFO [0m:      	├── ConfigRecord (evaluate): (empty!)
+[92mINFO [0m:      	├──> FedProx settings:
+[92mINFO [0m:      	│	└── Proximal mu: 0.01
+[92mINFO [0m:      	├──> Sampling:
+[92mINFO [0m:      	│	├──Fraction: train (1.00) | evaluate ( 1.00)
+[92mINFO [0m:      	│	├──Minimum nodes: train (2) | evaluate (2)
+[92mINFO [0m:      	│	└──Minimum available nodes: 2
+[92mINFO [0m:      	└──> Keys in records:
+[92mINFO [0m:      		├── Weighted by: 'num-examples'
+[92mINFO [0m:      		├── ArrayRecord key: 'arrays'
+[92mINFO [0m:      		└── ConfigRecord key: 'config'
+[92mINFO [0m:      
+[92mINFO [0m:      Initial global evaluation results: None
+[92mINFO [0m:      
+[92mINFO [0m:      [ROUND 1/90]
+[92mINFO [0m:      configure_train: Sampled 5 nodes (out of 5)
+[91mERROR [0m:     An exception occured!! [Errno 2] No such file or directory: '/tmp/ray/session_2026-09-23_23-45-31_103906_1313252/logs/gcs_server.err'
+[91mERROR [0m:     Traceback (most recent call last):
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 205, in run_api
+    backend = backend_fn()
+              ^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 356, in backend_fn
+    return backend_type(backend_config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/backend/raybackend.py", line 52, in __init__
+    self.init_ray(backend_config)
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/backend/raybackend.py", line 113, in init_ray
+    ray.init(
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/worker.py", line 1910, in init
+    _global_node = ray._private.node.Node(
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 335, in __init__
+    self.start_head_processes()
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 1355, in start_head_processes
+    assert self.get_gcs_client() is not None
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 659, in get_gcs_client
+    self._init_gcs_client()
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 698, in _init_gcs_client
+    with open(os.path.join(self._logs_dir, "gcs_server.err")) as err:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/ray/session_2026-09-23_23-45-31_103906_1313252/logs/gcs_server.err'
+
+[93mWARNING [0m:   Stopping Simulation Engine.
+[91mERROR [0m:     An exception occurred !! Simulation Engine crashed.
+[91mERROR [0m:     Traceback (most recent call last):
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 205, in run_api
+    backend = backend_fn()
+              ^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 356, in backend_fn
+    return backend_type(backend_config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/backend/raybackend.py", line 52, in __init__
+    self.init_ray(backend_config)
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/backend/raybackend.py", line 113, in init_ray
+    ray.init(
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/worker.py", line 1910, in init
+    _global_node = ray._private.node.Node(
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 335, in __init__
+    self.start_head_processes()
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 1355, in start_head_processes
+    assert self.get_gcs_client() is not None
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 659, in get_gcs_client
+    self._init_gcs_client()
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 698, in _init_gcs_client
+    with open(os.path.join(self._logs_dir, "gcs_server.err")) as err:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/ray/session_2026-09-23_23-45-31_103906_1313252/logs/gcs_server.err'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/simulation/run_simulation.py", line 303, in _main_loop
+    vce.start_vce(
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 407, in start_vce
+    raise ex
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 388, in start_vce
+    run_api(
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 257, in run_api
+    raise RuntimeError("Simulation Engine crashed.") from ex
+RuntimeError: Simulation Engine crashed.
+
+[91mERROR [0m:     Simulation raised an exception
+Traceback (most recent call last):
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 205, in run_api
+    backend = backend_fn()
+              ^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 356, in backend_fn
+    return backend_type(backend_config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/backend/raybackend.py", line 52, in __init__
+    self.init_ray(backend_config)
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/backend/raybackend.py", line 113, in init_ray
+    ray.init(
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/worker.py", line 1910, in init
+    _global_node = ray._private.node.Node(
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 335, in __init__
+    self.start_head_processes()
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 1355, in start_head_processes
+    assert self.get_gcs_client() is not None
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 659, in get_gcs_client
+    self._init_gcs_client()
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/ray/_private/node.py", line 698, in _init_gcs_client
+    with open(os.path.join(self._logs_dir, "gcs_server.err")) as err:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/ray/session_2026-09-23_23-45-31_103906_1313252/logs/gcs_server.err'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/simulation/run_simulation.py", line 303, in _main_loop
+    vce.start_vce(
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 407, in start_vce
+    raise ex
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 388, in start_vce
+    run_api(
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/server/superlink/fleet/vce/vce_api.py", line 257, in run_api
+    raise RuntimeError("Simulation Engine crashed.") from ex
+RuntimeError: Simulation Engine crashed.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/simulation/app.py", line 303, in run_simulation_process
+    updated_context = _run_simulation(
+                      ^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/simulation/run_simulation.py", line 462, in _run_simulation
+    updated_context = _main_loop(*args)
+                      ^^^^^^^^^^^^^^^^^
+  File "/workspaces/FedProtoContinual/.venv/lib/python3.12/site-packages/flwr/simulation/run_simulation.py", line 325, in _main_loop
+    raise RuntimeError("An error was encountered. Ending simulation.") from ex
+RuntimeError: An error was encountered. Ending simulation.
+[91mERROR [0m:     Exit Code: 700
+
+An unhandled exception occurred when running the simulation.
+
+For more information, visit: <https://flower.ai/docs/framework/1.29/en/ref-exit-codes/700.html>
+
+[92mINFO [0m:      Starting logstream for run_id `6334031027211678237`
