@@ -191,8 +191,10 @@ class FCLModel(nn.Module):
                 f"but a_max is set to {self.a_max}. Cannot load more than a_max incorporated adapters."
                 "Plase check the server configuration or incorporation/substitution logic."
             )
+        device = next(self.parameters(), None)
+        device = device.device if device is not None else None
         self.incorporated_adapters = nn.ModuleList(
-            build_adapter_from_topology(topo) for topo in topologies
+            build_adapter_from_topology(topo, device=device) for topo in topologies
         )
 
     def get_global_arrays(self) -> dict:

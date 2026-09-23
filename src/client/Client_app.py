@@ -255,6 +255,7 @@ def train(msg: Message, context: Context) -> Message:
     model.to(device)
 
     known_consolidated = _load_local_state(context, model, device)
+    model.to(device)
     candidacy_criterion = _load_candidacy_criterion(context)
     _apply_incorporation_outcome(
         context, model, config, partition_id, candidacy_criterion, device
@@ -478,6 +479,7 @@ def evaluate(msg: Message, context: Context) -> Message:
     model.to(device)
 
     known_consolidated = _load_local_state(context, model, device)
+    model.to(device)
     _load_global_prototypes(model, config, known_consolidated=known_consolidated)
 
     if config.get("vote_round", False):

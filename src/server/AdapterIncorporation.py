@@ -193,7 +193,7 @@ class AdapterIncorporationState:
         }
 
         self.topologies.append(adapter_topology(adapter))
-        prefix = f"incorporated_adapters.{idx}."
+        prefix = f"incorporated_adapter.{idx}."
         new_full_sd = dict(base_sd)
         for k, v in adapter.state_dict().items():
             new_full_sd[f"{prefix}{k}"] = v.clone()

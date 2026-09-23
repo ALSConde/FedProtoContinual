@@ -128,8 +128,27 @@ def main(grid: Grid, context: Context) -> None:
                 a_max=a_max,
             )
 
+            eval_sd = eval_arrays.to_torch_state_dict()
+            n_topologies = len(strategy.incorporation.topologies)
+
+            stale_prefixes = tuple(
+                f"incorporated_adapter.{i}."
+                for i in range(
+                    n_topologies, n_topologies + strategy.incorporation.a_max
+                )
+            )
+            dropped = [k for k in eval_sd.keys() if k.startswith(stale_prefixes)]
+            if dropped:
+                print(
+                    f"[server_eval] round {current_round}: dropping {len(dropped)} "
+                    "stale incorporated-adapter weight(s) not covered by the current "
+                    "topology list (expected right after a same-round reversion)."
+                )
+                for k in dropped:
+                    del eval_sd[k]
+
             eval_model.load_incorporated_topology(strategy.incorporation.topologies)
-            eval_model.set_global_arrays(eval_arrays.to_torch_state_dict())
+            eval_model.set_global_arrays(eval_sd)
             eval_model.classifier.update_from_global(mu_all, ids_all)
             eval_model.to(device)
 

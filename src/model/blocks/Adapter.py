@@ -202,7 +202,11 @@ def adapter_topology(adapter: "Adapter") -> dict:
     }
 
 
-def build_adapter_from_topology(topology: dict) -> "Adapter":
+def build_adapter_from_topology(
+    topology: dict,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+) -> "Adapter":
     stage_dims = topology["stage_dims"]
     if not stage_dims:
         raise RuntimeError("Topology must contain at least one down stage.")
@@ -217,8 +221,11 @@ def build_adapter_from_topology(topology: dict) -> "Adapter":
     )
 
     adapter.down_stages = nn.ModuleList(
-        [WDLayer(d_in, d_out, bias=has_bias) for d_in, d_out, has_bias in stage_dims]
+        [
+            WDLayer(d_in, d_out, bias=has_bias, device=device, dtype=dtype)
+            for d_in, d_out, has_bias in stage_dims
+        ]
     )
     up_in, up_out, up_bias = topology["up_proj_dims"]
-    adapter.up_proj = WDLayer(up_in, up_out, bias=up_bias)
+    adapter.up_proj = WDLayer(up_in, up_out, bias=up_bias, device=device, dtype=dtype)
     return adapter
