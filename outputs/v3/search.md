@@ -1,0 +1,13 @@
+python scripts/grid_search.py \
+  --param candidacy-quorum=0.3,0.4,0.5,0.6 \
+  --param incorporation-degrade-tolerance=0.002,0.01,0.02,0.05 \
+  --param vote-margin=0.001,0.005,0.01 \
+  --fixed local-epochs=5 \
+  --fixed lambda-kd=0.5 \
+  --fixed tau=250 \
+  --fixed theta-exp=0.10 \
+  --fixed theta-alpha=0.05 \
+  --fixed dirichlet-alpha=0.3 \
+  --fixed classes-per-step=9 \
+  --strategy random --n-trials 30 \
+  --metric avg_inc_acc
