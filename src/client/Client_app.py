@@ -26,6 +26,8 @@ from .ClientTask import (
     vote_on_candidate,
 )
 from ..utils.data.utd_mahd_dataset import (
+    build_class_schedule,
+    current_step_index,
     load_data,
     parse_int_list_config,
     resolve_classes_per_step,
@@ -239,6 +241,18 @@ def _load_client_data(msg: Message, context: Context):
     )
 
 
+def _is_first_step(context: Context, current_round: int) -> bool:
+    scenario = str(context.run_config.get("training-scenario", "federated")).lower()
+    raw_classes_per_step = context.run_config.get("classes-per-step", None)
+    if raw_classes_per_step is None:
+        return False  # Federated Learning scenario, not class-incremental
+    classes_per_step = resolve_classes_per_step(scenario, int(raw_classes_per_step))
+    num_classes_total = int(context.run_config["num-classes-total"])
+    schedule = build_class_schedule(num_classes_total, classes_per_step)
+    rounds_per_step = int(context.run_config.get("rounds-per-step", 1))
+    return current_step_index(current_round, rounds_per_step, schedule) == 0
+
+
 @app.train()
 def train(msg: Message, context: Context) -> Message:
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -332,6 +346,9 @@ def train(msg: Message, context: Context) -> Message:
         num_classes=max(model.classifier.num_classes, 1),
         device=device,
     )
+    lambda_kd = float(context.run_config.get("lambda-kd", 0.5))
+    if _is_first_step(context, current_round):
+        lambda_kd = 0.0
 
     train_loss = train_fn(
         model,
@@ -342,7 +359,7 @@ def train(msg: Message, context: Context) -> Message:
         device=device,
         known_consolidated=known_consolidated,
         lambda_proto=float(context.run_config.get("lambda-proto", 1.0)),
-        lambda_kd=float(context.run_config.get("lambda-kd", 0.5)),
+        lambda_kd=lambda_kd,
         kd_mode=str(context.run_config.get("kd-mode", "kl")),
         kd_temperature=float(context.run_config.get("kd-temperature", 2.0)),
     )
