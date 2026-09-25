@@ -358,6 +358,7 @@ def train(msg: Message, context: Context) -> Message:
     _apply_incorporation_outcome(
         context, model, config, partition_id, candidacy_criterion, device
     )
+    model.to(device)
     _load_global_prototypes(model, config, known_consolidated=known_consolidated)
 
     (train_loader, _, _), partition_id = _load_client_data(msg, context)

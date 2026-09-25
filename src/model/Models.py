@@ -179,10 +179,11 @@ class FCLModel(nn.Module):
         return self.classifier(self.embed(x))
 
     def reset_local_branch(self) -> None:
+        device = next(self.parameters()).device
         self.adapter_local = Adapter(
             in_features=self.hidden_dim, down_features=self.d_hat_local
-        )
-        self.alpha_gate = AlphaGate(embedding_dim=self.hidden_dim)
+        ).to(device)
+        self.alpha_gate = AlphaGate(embedding_dim=self.hidden_dim).to(device)
 
     def load_incorporated_topology(self, topologies: list) -> None:
         if len(topologies) > self.a_max:
