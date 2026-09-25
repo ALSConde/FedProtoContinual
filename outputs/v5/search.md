@@ -1,0 +1,15 @@
+python scripts/grid_search.py \
+  --param lambda-kd=0.0,0.5,1.0,2.0,4.0 \
+  --fixed local-epochs=5 \
+  --fixed tau=250 \
+  --fixed theta-exp=0.10 \
+  --fixed theta-alpha=0.05 \
+  --fixed candidacy-quorum=0.4 \
+  --fixed vote-adapt-steps=20 \
+  --fixed vote-adapt-lr=0.001 \
+  --fixed incorporation-degrade-tolerance=0.02 \
+  --fixed vote-margin=0.001 \
+  --fixed dirichlet-alpha=0.3 \
+  --fixed classes-per-step=9 \
+  --strategy grid \
+  --metric avg_inc_acc
