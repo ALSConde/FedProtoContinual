@@ -1,6 +1,7 @@
 import pickle
 import io
 import random
+from typing import Optional
 from flwr.app import (
     ArrayRecord,
     ConfigRecord,
@@ -15,7 +16,7 @@ import torch
 from src.client.CandidacyCriterion import CandidacyCriterion
 from src.client.ExpansionCriterion import ExpansionCriterion
 from src.model.Models import FCLModel
-from src.model.blocks.Adapter import promote_to_incorporated
+from src.model.blocks.Adapter import Adapter, promote_to_incorporated
 from src.model.layers.WDStats import WDStats
 from src.model.layers.PrototypeMemory import PrototypeMemory
 from .ClientTask import (
@@ -27,7 +28,7 @@ from .ClientTask import (
 )
 from ..utils.data.utd_mahd_dataset import (
     build_class_schedule,
-    current_step_index,
+    classes_seen_until_round,
     load_data,
     parse_int_list_config,
     resolve_classes_per_step,
@@ -41,6 +42,8 @@ _LOCAL_STATE_KEY = "local_modules"
 _CANDIDACY_STATE_KEY = "candidacy_state"
 _PROMOTED_CHECKPOINT_KEY = "promoted_local_checkpoint"
 _VOTE_ADAPT_CHECKPOINT_KEY = "vote_adapt_checkpoint"
+_KD_TEACHER_SNAPSHOT_KEY = "kd_teacher_snapshot"
+_KD_TEACHER_MARKER_KEY = "kd_teacher_marker"  # class-count or block index
 
 
 def _seed_everything(base_seed: int, partition_id: int, current_round: int) -> None:
@@ -241,16 +244,97 @@ def _load_client_data(msg: Message, context: Context):
     )
 
 
-def _is_first_step(context: Context, current_round: int) -> bool:
+def _current_num_classes_seen(context: Context, current_round: int) -> Optional[int]:
     scenario = str(context.run_config.get("training-scenario", "federated")).lower()
     raw_classes_per_step = context.run_config.get("classes-per-step", None)
     if raw_classes_per_step is None:
-        return False  # Federated Learning scenario, not class-incremental
+        return None
     classes_per_step = resolve_classes_per_step(scenario, int(raw_classes_per_step))
     num_classes_total = int(context.run_config["num-classes-total"])
     schedule = build_class_schedule(num_classes_total, classes_per_step)
     rounds_per_step = int(context.run_config.get("rounds-per-step", 1))
-    return current_step_index(current_round, rounds_per_step, schedule) == 0
+    return len(classes_seen_until_round(current_round, rounds_per_step, schedule))
+
+
+def _snapshot_global_branch(context: Context, model: FCLModel) -> None:
+    buffer = io.BytesIO()
+    torch.save(
+        {
+            "feature_extractor": model.feature_extractor,
+            "adapter_global": model.adapter_global,
+            "incorporated_adapters": model.incorporated_adapters,
+        },
+        buffer,
+    )
+    context.state[_KD_TEACHER_SNAPSHOT_KEY] = ConfigRecord({"blob": buffer.getvalue()})
+
+
+def _load_kd_teacher_embed_fn(context: Context, device: torch.device):
+    if _KD_TEACHER_SNAPSHOT_KEY not in context.state:
+        return None
+    blob = context.state[_KD_TEACHER_SNAPSHOT_KEY]["blob"]
+    bundle = torch.load(io.BytesIO(blob), map_location=device, weights_only=False)
+    frozen_fe = bundle["feature_extractor"].to(device)
+    frozen_ag = bundle["adapter_global"].to(device)
+    frozen_incorp = bundle["incorporated_adapters"].to(device)
+    for module in (frozen_fe, frozen_ag, frozen_incorp):
+        for p in module.parameters():
+            p.requires_grad_(False)
+
+    def _embed_global(x: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            feats = frozen_fe(x)
+            x_global = frozen_ag(feats)
+            if len(frozen_incorp) > 0:
+                x_global = x_global + sum(
+                    a.forward_delta(x_global)
+                    for a in frozen_incorp
+                    if isinstance(a, Adapter)
+                )
+            return x_global
+
+    return _embed_global
+
+
+def _resolve_kd_teacher(
+    context: Context,
+    model: FCLModel,
+    current_round: int,
+    lambda_kd: float,
+    device: torch.device,
+):
+    num_classes = _current_num_classes_seen(context, current_round)
+
+    if num_classes is None:
+        refresh_every = int(context.run_config.get("kd-refresh-rounds", 10))
+        block_idx = (current_round - 1) // refresh_every
+        last_block = (
+            int(context.state[_KD_TEACHER_MARKER_KEY]["n"])
+            if _KD_TEACHER_MARKER_KEY in context.state
+            else None
+        )
+        if last_block is None:
+            context.state[_KD_TEACHER_MARKER_KEY] = ConfigRecord({"n": block_idx})
+            return 0.0, None  # first block: nothing old to distill against yet
+        if block_idx > last_block:
+            _snapshot_global_branch(context, model)
+            context.state[_KD_TEACHER_MARKER_KEY] = ConfigRecord({"n": block_idx})
+        return lambda_kd, _load_kd_teacher_embed_fn(context, device)
+
+    last_num_classes = (
+        int(context.state[_KD_TEACHER_MARKER_KEY]["n"])
+        if _KD_TEACHER_MARKER_KEY in context.state
+        else None
+    )
+    if last_num_classes is None:
+        # First step: no old-class knowledge exists yet, so KD stays off —
+        # just remember the current class count to detect the next change.
+        context.state[_KD_TEACHER_MARKER_KEY] = ConfigRecord({"n": num_classes})
+        return 0.0, None
+    if num_classes > last_num_classes:
+        _snapshot_global_branch(context, model)
+        context.state[_KD_TEACHER_MARKER_KEY] = ConfigRecord({"n": num_classes})
+    return lambda_kd, _load_kd_teacher_embed_fn(context, device)
 
 
 @app.train()
@@ -346,9 +430,14 @@ def train(msg: Message, context: Context) -> Message:
         num_classes=max(model.classifier.num_classes, 1),
         device=device,
     )
-    lambda_kd = float(context.run_config.get("lambda-kd", 0.5))
-    if _is_first_step(context, current_round):
-        lambda_kd = 0.0
+
+    lambda_kd, frozen_embed_fn = _resolve_kd_teacher(
+        context,
+        model,
+        current_round,
+        float(context.run_config.get("lambda-kd", 0.5)),
+        device,
+    )
 
     train_loss = train_fn(
         model,
@@ -362,6 +451,7 @@ def train(msg: Message, context: Context) -> Message:
         lambda_kd=lambda_kd,
         kd_mode=str(context.run_config.get("kd-mode", "kl")),
         kd_temperature=float(context.run_config.get("kd-temperature", 2.0)),
+        frozen_embed_fn=frozen_embed_fn,
     )
 
     sum_h, counts, class_ids = memory.get_stats()

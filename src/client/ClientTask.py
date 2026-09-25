@@ -1,6 +1,5 @@
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 import torch
-import torch.nn as nn
 from torch.utils.data import TensorDataset, random_split, DataLoader
 import torch.nn.functional as F
 from src.model.Models import FCLModel
@@ -62,6 +61,7 @@ def train_fn(
     lambda_kd: float = 0.5,
     kd_mode: str = "kl",
     kd_temperature: float = 2.0,
+    frozen_embed_fn: Optional[Callable] = None,
 ) -> float:
     if kd_mode not in ("kl", "embedding_mse"):
         raise ValueError(
@@ -73,7 +73,11 @@ def train_fn(
     known_consolidated = known_consolidated or set()
     known_sorted = sorted(known_consolidated)
 
-    embed_global = model.frozen_global_embed_fn()
+    embed_global = (
+        frozen_embed_fn
+        if frozen_embed_fn is not None
+        else model.frozen_global_embed_fn()
+    )
 
     optmizer = torch.optim.Adam(model.parameters(), lr=lr)
     running_loss, n_batches = 0.0, 0
