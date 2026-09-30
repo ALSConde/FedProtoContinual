@@ -1,7 +1,6 @@
 python scripts/grid_search.py \
-  --param local-epochs=5,7 \
-  --param lambda-kd=0.0,0.5,1.0,2.0 \
-  --param seed=0,1,2,3,4 \
+  --param lambda-kd=0.5,1.0,1.5,2.0 \
+  --param local-epochs=3,5,7 \
   --fixed tau=250 \
   --fixed theta-exp=0.10 \
   --fixed theta-alpha=0.05 \
@@ -13,4 +12,4 @@ python scripts/grid_search.py \
   --fixed dirichlet-alpha=0.3 \
   --fixed classes-per-step=9 \
   --strategy grid \
-  --metric avg_inc_acc
+  --metric server_eval_acc
