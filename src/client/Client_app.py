@@ -278,6 +278,7 @@ def _load_kd_teacher_embed_fn(context: Context, device: torch.device):
     frozen_ag = bundle["adapter_global"].to(device)
     frozen_incorp = bundle["incorporated_adapters"].to(device)
     for module in (frozen_fe, frozen_ag, frozen_incorp):
+        module.eval()
         for p in module.parameters():
             p.requires_grad_(False)
 

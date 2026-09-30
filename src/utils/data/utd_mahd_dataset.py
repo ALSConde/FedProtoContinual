@@ -116,6 +116,11 @@ class UTDMAHDInertial(Dataset):
 
     def __getitem__(self, idx: int):
         window, label, _ = self.windows[idx]
+
+        mean = window.mean(axis=0, keepdims=True)
+        std = window.std(axis=0, keepdims=True) + 1e-8
+        window = (window - mean) / std
+
         x = torch.from_numpy(window.T).contiguous()  # Shape: (C, T)
         return x, label
 

@@ -1,4 +1,5 @@
 import copy
+import math
 from typing import Callable
 import torch
 import torch.nn as nn
@@ -6,6 +7,51 @@ import torch.nn.functional as F
 from src.model.blocks.Adapter import Adapter, build_adapter_from_topology
 from src.model.layers.AlphaGate import AlphaGate
 from src.model.layers.PrototypeClassifier import PrototypeClassifier
+
+
+class TransformerBackbone(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        num_layers: int = 2,
+        nhead: int = 4,
+        dropout: float = 0.0,
+        max_len: int = 4096,
+    ):
+        super().__init__()
+        if hidden_dim % nhead != 0:
+            raise ValueError(
+                f"hidden_dim ({hidden_dim}) must be divisible by nhead ({nhead})."
+            )
+        self.embed = nn.Linear(input_dim, hidden_dim)
+        pe = torch.zeros(max_len, hidden_dim)
+        pos = torch.arange(max_len).unsqueeze(1)
+        div = torch.exp(
+            torch.arange(0, hidden_dim, 2) * (-math.log(10000.0) / hidden_dim)
+        )
+        pe[:, 0::2] = torch.sin(pos * div)
+        pe[:, 1::2] = torch.cos(pos * div)[:, : hidden_dim // 2]
+        self.register_buffer("pe", pe, persistent=False)
+
+        layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=nhead,
+            dim_feedforward=hidden_dim * 2,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(
+            layer, num_layers=num_layers, enable_nested_tensor=False
+        )
+        self.norm = nn.LayerNorm(hidden_dim)
+
+    def forward(self, x):
+        h = self.embed(x)  # (B, T, hidden_dim)
+        h = h + self.pe[: h.size(1)]
+        h = self.encoder(h)
+        return self.norm(h.mean(dim=1))
 
 
 class LightweightResidualBlock(nn.Module):
@@ -77,7 +123,7 @@ class ResidualBlock(nn.Module):
 
 
 class FeatureExtractor(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int) -> None:
+    def __init__(self, input_dim: int, hidden_dim: int, dropout: float = 0.2) -> None:
         super().__init__()
         self.conv1 = nn.Conv1d(
             input_dim, out_channels=32, kernel_size=7, stride=1, padding=1
@@ -85,18 +131,31 @@ class FeatureExtractor(nn.Module):
         self.norm1 = nn.GroupNorm(num_groups=8, num_channels=32)
         self.conv2 = nn.Conv1d(32, out_channels=64, kernel_size=5, stride=2, padding=1)
         self.norm2 = nn.GroupNorm(num_groups=8, num_channels=64)
-        self.lstm = nn.LSTM(
-            input_size=64, hidden_size=hidden_dim, num_layers=3, batch_first=True
+        self.conv3 = nn.Conv1d(64, out_channels=128, kernel_size=5, stride=2, padding=1)
+        self.norm3 = nn.GroupNorm(num_groups=8, num_channels=128)
+ 
+        self.gru = nn.GRU(
+            input_size=128,
+            hidden_size=hidden_dim,
+            batch_first=True,
+            dropout=dropout,
+            num_layers=1
         )
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         x = F.relu(self.norm1(self.conv1(x)), inplace=True)
         x = F.relu(self.norm2(self.conv2(x)), inplace=True)
+        x = F.relu(self.norm3(self.conv3(x)), inplace=True)
+
+        x = self.dropout(x)
+
         x = x.permute(
             0, 2, 1
-        )  # Change shape to (batch_size, seq_len, features) for LSTM
-        _, (h_n, _) = self.lstm(x)
-        return h_n[-1]
+        )  # Change shape to (batch_size, seq_len, features) for transformer
+
+        gru_out, _ = self.gru(x)
+        return gru_out.mean(dim=1)
 
 
 class FCLModel(nn.Module):
@@ -158,6 +217,7 @@ class FCLModel(nn.Module):
         frozen_ag = copy.deepcopy(self.adapter_global)
         frozen_incorp = copy.deepcopy(self.incorporated_adapters)
         for module in (frozen_fe, frozen_ag, frozen_incorp):
+            module.eval()
             for p in module.parameters():
                 p.requires_grad_(False)
 
