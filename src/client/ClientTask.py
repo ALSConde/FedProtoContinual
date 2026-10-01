@@ -202,7 +202,7 @@ def short_local_adaptation(
     optimizer = torch.optim.Adam(trainable_params, lr=lr)
     steps_done = 0
     try:
-        if model.classifier.num_classes == 0:
+        if model.classifier.num_classes != 0:
             for x, y in adapt_loader:
                 if steps_done >= max_steps:
                     break
