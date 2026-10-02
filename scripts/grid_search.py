@@ -290,6 +290,13 @@ def _extract_metrics(summary_path: Path) -> dict[str, Any]:
         "worst_class_forgetting_id": last_eval.get("worst_class_forgetting_id"),
         "worst_class_bwt": last_eval.get("worst_class_bwt"),
         "worst_class_bwt_id": last_eval.get("worst_class_bwt_id"),
+        "server_eval_acc_tail": last_eval.get("server_eval_acc_tail"),
+        "server_eval_loss_tail": last_eval.get("server_eval_loss_tail"),
+        "client_eval_acc": last_eval.get("client_eval_acc"),
+        "client_eval_acc_global": last_eval.get("client_eval_acc_global"),
+        "client_eval_acc_tail": last_eval.get("client_eval_acc_tail"),
+        "client_eval_acc_global_tail": last_eval.get("client_eval_acc_global_tail"),
+        "personalization_gain_tail": last_eval.get("personalization_gain_tail"),
     }
 
 
@@ -476,7 +483,7 @@ def main() -> None:
                 "output-dir": str(results_dir / trial_tag),
             }
             print(f'[{trial_tag}] --run-config "{_build_run_config_string(overrides)}"')
-            return
+        return
 
     rows: list[dict[str, Any]] = []
     try:

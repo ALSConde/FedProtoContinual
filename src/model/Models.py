@@ -167,8 +167,10 @@ class FCLModel(nn.Module):
         d_hat_local: int = 8,
         classifier_scale_init: float = 20.0,
         a_max: int = 3,
+        use_local_adapter: bool = True,
     ):
         super().__init__()
+        self.use_local_adapter = use_local_adapter
         self.hidden_dim = hidden_dim
         self.d_hat_local = d_hat_local
         self.a_max = a_max
@@ -193,9 +195,12 @@ class FCLModel(nn.Module):
         feats = self.feature_extractor(x)
         x_global = self.adapter_global(feats)
         incorporated = self.incorporated_delta(x_global)
+        x_shared = x_global + incorporated
+        if not self.use_local_adapter:
+            # Ablation: no personalization branch, local == shared embedding.
+            return x_shared, x_shared
         delta_local = self.adapter_local.forward_delta(x_global)
         x_local = self.alpha_gate(x_global, delta_local) + incorporated
-        x_shared = x_global + incorporated
         return x_local, x_shared
 
     def embed(self, x: torch.Tensor) -> torch.Tensor:
@@ -203,6 +208,8 @@ class FCLModel(nn.Module):
         return x_local
 
     def local_contribution_ratio(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.use_local_adapter:
+            return torch.zeros(x.shape[0], device=x.device)
         feats = self.feature_extractor(x)
         x_global = self.adapter_global(feats)
         incorporated = self.incorporated_delta(x_global)
@@ -211,6 +218,16 @@ class FCLModel(nn.Module):
         alpha = self.alpha_gate.alpha_vector()
         scaled_local = alpha * delta_local
         return scaled_local.norm(dim=-1) / (x_shared.norm(dim=-1) + 1e-8)
+
+    def global_branch_parameters(self) -> list[nn.Parameter]:
+        params: list[nn.Parameter] = []
+        for module in (
+            self.feature_extractor,
+            self.adapter_global,
+            self.incorporated_adapters,
+        ):
+            params.extend(module.parameters())
+        return params
 
     def frozen_global_embed_fn(self) -> Callable[[torch.Tensor], torch.Tensor]:
         frozen_fe = copy.deepcopy(self.feature_extractor)

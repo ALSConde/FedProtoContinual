@@ -48,7 +48,7 @@ from typing import Any, Iterable
 
 try:
     from scipy.stats import spearmanr
-except ImportError:  # pragma: no cover - scipy is already a project dependency
+except ImportError:
     spearmanr = None
 
 
@@ -68,6 +68,13 @@ NON_HYPERPARAM_COLUMNS = {
     "worst_class_forgetting_id",
     "worst_class_bwt",
     "worst_class_bwt_id",
+    "server_eval_acc_tail",
+    "server_eval_loss_tail",
+    "client_eval_acc",
+    "client_eval_acc_global",
+    "client_eval_acc_tail",
+    "client_eval_acc_global_tail",
+    "personalization_gain_tail",
     "error",
 }
 

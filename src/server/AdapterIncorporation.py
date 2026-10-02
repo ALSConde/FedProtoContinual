@@ -13,7 +13,9 @@ class AdapterIncorporationState:
         quorum: float = 0.5,
         monitor_rounds: int = 3,
         degrade_tolerance: float = 0.02,
+        enabled: bool = True,
     ) -> None:
+        self.enabled = enabled
         self.a_max = a_max
         self.quorum = quorum
         self.monitor_rounds = monitor_rounds
@@ -84,6 +86,8 @@ class AdapterIncorporationState:
         return arrays
 
     def on_aggregate_train(self, replies: Iterable[Message]) -> None:
+        if not self.enabled:
+            return
         if self.pending_candidate is not None or self._reversion_watch is not None:
             return
         for reply in replies:
@@ -181,7 +185,9 @@ class AdapterIncorporationState:
             return
 
         adapter: Adapter = torch.load(
-            io.BytesIO(candidate["adapter_bytes"]), map_location="cpu", weights_only=False
+            io.BytesIO(candidate["adapter_bytes"]),
+            map_location="cpu",
+            weights_only=False,
         )
         idx = len(self.topologies)
 

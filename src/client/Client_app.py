@@ -19,6 +19,7 @@ from src.model.Models import FCLModel
 from src.model.blocks.Adapter import Adapter, promote_to_incorporated
 from src.model.layers.WDStats import WDStats
 from src.model.layers.PrototypeMemory import PrototypeMemory
+from src.utils.ablation import AblationFlags, resolve_ablation_flags
 from .ClientTask import (
     compute_local_contribution_ratio,
     train_fn,
@@ -59,13 +60,26 @@ def _seed_everything(base_seed: int, partition_id: int, current_round: int) -> N
 
 def _build_model(context: Context) -> FCLModel:
     input_dim = int(context.run_config["input-dim"])
+    flags = resolve_ablation_flags(context.run_config)
     return FCLModel(
         input_dim=input_dim,
         hidden_dim=int(context.run_config["hidden-dim"]),
         d_hat_global=int(context.run_config["d-hat-global"]),
         d_hat_local=int(context.run_config["d-hat-local"]),
         a_max=int(context.run_config.get("a-max", 3)),
+        use_local_adapter=flags.use_local_adapter,
     )
+
+
+def _resolve_proximal_mu(config: ConfigRecord, flags: AblationFlags) -> float:
+    """FedProx weight for this round; 0.0 (no proximal term) under FedAvg.
+
+    Flower's FedProx strategy injects "proximal-mu" into the train config, so the
+    server value wins when present; flags.proximal_mu is the run-config fallback.
+    """
+    if flags.fl_algorithm != "fedprox":
+        return 0.0
+    return float(config["proximal-mu"]) if "proximal-mu" in config else flags.proximal_mu
 
 
 def _apply_incorporated_topology(model: FCLModel, config: ConfigRecord) -> None:
@@ -346,6 +360,7 @@ def train(msg: Message, context: Context) -> Message:
     current_round = int(config.get("server_round", 1))
     base_seed = int(context.run_config.get("seed", 0))
     _seed_everything(base_seed, partition_id, current_round)
+    flags = resolve_ablation_flags(context.run_config)
 
     model = _build_model(context)
     model.to(device)
@@ -403,7 +418,9 @@ def train(msg: Message, context: Context) -> Message:
             model.classifier._expand(required_num_classes)
 
     expanded_width, expanded_depth, expansion_g = 0, 0, 0.0
-    if model.classifier.num_classes > 0:
+    # The saturation signal g is always logged when a local adapter exists (useful to
+    # calibrate theta-exp); the expansion itself only happens with enable-expansion.
+    if flags.use_local_adapter and model.classifier.num_classes > 0:
         signal = compute_expansion_signal(
             model,
             train_loader,
@@ -417,15 +434,16 @@ def train(msg: Message, context: Context) -> Message:
             result = criterion.compute(**signal)
             expansion_g = float(result["g"])
 
-            kind = criterion.step(
-                model.adapter_local, result["g"], g_reduced_below_threshold=False
-            )
-            if kind is not None:
-                print(
-                    f"[client {partition_id} expands in {kind} mode (g={result['g']:.4f})]"
+            if flags.enable_expansion:
+                kind = criterion.step(
+                    model.adapter_local, result["g"], g_reduced_below_threshold=False
                 )
-                expanded_width = int(kind == "width")
-                expanded_depth = int(kind == "depth")
+                if kind is not None:
+                    print(
+                        f"[client {partition_id} expands in {kind} mode (g={result['g']:.4f})]"
+                    )
+                    expanded_width = int(kind == "width")
+                    expanded_depth = int(kind == "depth")
 
     memory = PrototypeMemory(
         embedding_dim=int(context.run_config["hidden-dim"]),
@@ -433,13 +451,16 @@ def train(msg: Message, context: Context) -> Message:
         device=device,
     )
 
-    lambda_kd, frozen_embed_fn = _resolve_kd_teacher(
-        context,
-        model,
-        current_round,
-        float(context.run_config.get("lambda-kd", 0.5)),
-        device,
-    )
+    if flags.enable_kd:
+        lambda_kd, frozen_embed_fn = _resolve_kd_teacher(
+            context,
+            model,
+            current_round,
+            float(context.run_config.get("lambda-kd", 0.5)),
+            device,
+        )
+    else:
+        lambda_kd, frozen_embed_fn = 0.0, None
 
     train_loss = train_fn(
         model,
@@ -454,6 +475,7 @@ def train(msg: Message, context: Context) -> Message:
         kd_mode=str(context.run_config.get("kd-mode", "kl")),
         kd_temperature=float(context.run_config.get("kd-temperature", 2.0)),
         frozen_embed_fn=frozen_embed_fn,
+        proximal_mu=_resolve_proximal_mu(config, flags),
     )
 
     sum_h, counts, class_ids = memory.get_stats()
@@ -463,11 +485,18 @@ def train(msg: Message, context: Context) -> Message:
 
     config_reply_data = {"proto_stats": pickle.dumps((sum_h, counts, class_ids))}
 
-    alpha_mean = model.alpha_gate.mean_alpha()
-    contribution_ratio = compute_local_contribution_ratio(model, train_loader, device)
-    should_propose = candidacy_criterion.step(
-        contribution_ratio if contribution_ratio is not None else 0.0, local_acc=None
+    alpha_mean = model.alpha_gate.mean_alpha() if flags.use_local_adapter else 0.0
+    contribution_ratio = (
+        compute_local_contribution_ratio(model, train_loader, device)
+        if flags.use_local_adapter
+        else None
     )
+    should_propose = False
+    if flags.enable_incorporation:
+        should_propose = candidacy_criterion.step(
+            contribution_ratio if contribution_ratio is not None else 0.0,
+            local_acc=None,
+        )
     if should_propose and not config.get("candidacy_locked", False):
         candidate = promote_to_incorporated(model.adapter_local, model.alpha_gate)
         buffer = io.BytesIO()
@@ -580,6 +609,7 @@ def evaluate(msg: Message, context: Context) -> Message:
     current_round = int(config.get("server_round", 1))
     base_seed = int(context.run_config.get("seed", 0))
     _seed_everything(base_seed, partition_id, current_round)
+    flags = resolve_ablation_flags(context.run_config)
 
     model = _build_model(context)
     model.to(device)
@@ -598,17 +628,27 @@ def evaluate(msg: Message, context: Context) -> Message:
 
     if len(valloader.dataset) == 0:
         metrics_reply = MetricRecord(
-            {"eval_loss": 0.0, "eval_acc": 0.0, "num-examples": 0}
+            {
+                "eval_loss": 0.0,
+                "eval_acc": 0.0,
+                "eval_acc_global": 0.0,
+                "num-examples": 0,
+            }
         )
         content = RecordDict({"metrics": metrics_reply})
         return Message(content=content, reply_to=msg)
 
     eval_loss, eval_acc = test_fn(model, valloader, device)
+    if flags.use_local_adapter:
+        _, eval_acc_global = test_fn(model, valloader, device, branch="global")
+    else:
+        eval_acc_global = eval_acc
 
     metrics_reply = MetricRecord(
         {
             "eval_loss": eval_loss,
             "eval_acc": eval_acc,
+            "eval_acc_global": eval_acc_global,
             "num-examples": len(valloader.dataset),
         }
     )

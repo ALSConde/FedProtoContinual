@@ -62,6 +62,7 @@ def train_fn(
     kd_mode: str = "kl",
     kd_temperature: float = 2.0,
     frozen_embed_fn: Optional[Callable] = None,
+    proximal_mu: float = 0.0,
 ) -> float:
     if kd_mode not in ("kl", "embedding_mse"):
         raise ValueError(
@@ -73,11 +74,19 @@ def train_fn(
     known_consolidated = known_consolidated or set()
     known_sorted = sorted(known_consolidated)
 
-    embed_global = (
-        frozen_embed_fn
-        if frozen_embed_fn is not None
-        else model.frozen_global_embed_fn()
-    )
+    use_kd = lambda_kd > 0.0
+    embed_global = None
+    if use_kd:
+        embed_global = (
+            frozen_embed_fn
+            if frozen_embed_fn is not None
+            else model.frozen_global_embed_fn()
+        )
+
+    prox_params, prox_ref = [], []
+    if proximal_mu > 0.0:
+        prox_params = model.global_branch_parameters()
+        prox_ref = [p.detach().clone() for p in prox_params]
 
     optmizer = torch.optim.Adam(model.parameters(), lr=lr)
     running_loss, n_batches = 0.0, 0
@@ -106,20 +115,25 @@ def train_fn(
             if l_proto is not None:
                 loss += lambda_proto * l_proto
 
-            h_global = embed_global(x)
-            if kd_mode == "embedding_mse":
-                l_kd = distillation_loss(h, h_global)
-            else:
-                reference_prototypes = (
-                    model.classifier.prototypes[known_sorted]
-                    if len(known_sorted) >= 2
-                    else None
-                )
-                l_kd = distillation_loss_kl(
-                    h, h_global, reference_prototypes, temperature=kd_temperature
-                )
-            if l_kd is not None:
-                loss += lambda_kd * l_kd
+            if use_kd:
+                h_global = embed_global(x)
+                if kd_mode == "embedding_mse":
+                    l_kd = distillation_loss(h, h_global)
+                else:
+                    reference_prototypes = (
+                        model.classifier.prototypes[known_sorted]
+                        if len(known_sorted) >= 2
+                        else None
+                    )
+                    l_kd = distillation_loss_kl(
+                        h, h_global, reference_prototypes, temperature=kd_temperature
+                    )
+                if l_kd is not None:
+                    loss += lambda_kd * l_kd
+
+            if proximal_mu > 0.0:
+                prox = sum((p - r).pow(2).sum() for p, r in zip(prox_params, prox_ref))
+                loss += 0.5 * proximal_mu * prox
 
             loss.backward()
             optmizer.step()
@@ -241,7 +255,20 @@ def vote_on_candidate(
     return vote, acc_before, acc_after
 
 
-def test_fn(model: FCLModel, valloader: DataLoader, device: torch.device):
+def test_fn(
+    model: FCLModel,
+    valloader: DataLoader,
+    device: torch.device,
+    branch: str = "local",
+):
+    """Accuracy/loss on a client loader.
+    branch="local": personalized embedding (adapter_local + alpha gate).
+    branch="global": shared embedding (global adapter + incorporated adapters),
+    i.e. what the server-side model sees; the difference between the two is the
+    per-client personalization gain.
+    """
+    if branch not in ("local", "global"):
+        raise ValueError(f"Invalid branch '{branch}'. Must be 'local' or 'global'.")
     model.to(device)
     model.eval()
     correct, total, loss_sum, n_batches = 0, 0, 0.0, 0
@@ -249,7 +276,7 @@ def test_fn(model: FCLModel, valloader: DataLoader, device: torch.device):
     with torch.no_grad():
         for x, y in valloader:
             x, y = x.to(device), y.to(device)
-            h = model.embed(x)
+            h = model.embed(x) if branch == "local" else model.embed_both(x)[1]
 
             if model.classifier.num_classes == 0:
                 continue

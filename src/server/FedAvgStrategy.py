@@ -16,6 +16,7 @@ class FedAvgStrategy(FedAvg):
         candidacy_quorum: float = 0.5,
         incorporation_monitor_rounds: int = 3,
         incorporation_degrade_tolerance: float = 0.02,
+        enable_incorporation: bool = True,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -28,8 +29,10 @@ class FedAvgStrategy(FedAvg):
             quorum=candidacy_quorum,
             monitor_rounds=incorporation_monitor_rounds,
             degrade_tolerance=incorporation_degrade_tolerance,
+            enabled=enable_incorporation,
         )
 
+        self.client_eval_history: list[dict] = []
         self.incorp_flag: str = "false"
 
     def configure_train(
@@ -92,4 +95,10 @@ class FedAvgStrategy(FedAvg):
         replies = list(replies)
         metrics = super().aggregate_evaluate(server_round, replies)
         self.incorporation.on_aggregate_evaluate(replies, metrics)
+        if metrics is not None and "eval_acc" in metrics:
+            entry: dict = {"round": int(server_round)}
+            for key in ("eval_acc", "eval_acc_global", "eval_loss"):
+                if key in metrics:
+                    entry[key] = float(metrics[key])
+            self.client_eval_history.append(entry)
         return metrics

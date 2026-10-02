@@ -7,6 +7,7 @@ from src.model.Models import FCLModel
 from src.server.FedAvgStrategy import FedAvgStrategy
 from src.server.FedProxStrategy import FedProxStrategy
 from src.server.ServerEvaluation import ForgettingMonitor, evaluate_global_model
+from src.utils.ablation import resolve_ablation_flags
 from src.utils.data.utd_mahd_dataset import (
     build_class_schedule,
     classes_seen_until_round,
@@ -17,6 +18,43 @@ from src.utils.data.utd_mahd_dataset import (
 )
 
 app = ServerApp()
+
+
+def _tail_mean(history: list[dict], key: str, window: int):
+    values = [h[key] for h in history[-window:] if key in h]
+    return sum(values) / len(values) if values else None
+
+
+def _final_window_metrics(
+    server_history: list[dict], client_history: list[dict], window: int
+) -> dict:
+    """Last-round and last-`window`-rounds means of the federated metrics.
+
+    server_eval_*  : global model on the held-out subjects (generalization to unseen users).
+    client_eval_*  : accuracy on each client's own validation split, weighted by size;
+                     client_eval_acc uses the personalized embedding, client_eval_acc_global
+                     the shared one (so their difference is the personalization gain).
+    """
+    out: dict = {}
+    tail_keys = {
+        "server_eval_acc_tail": (server_history, "server_eval_acc"),
+        "server_eval_loss_tail": (server_history, "server_eval_loss"),
+        "client_eval_acc_tail": (client_history, "eval_acc"),
+        "client_eval_acc_global_tail": (client_history, "eval_acc_global"),
+    }
+    for name, (hist, key) in tail_keys.items():
+        value = _tail_mean(hist, key, window)
+        if value is not None:
+            out[name] = value
+    if client_history:
+        last = client_history[-1]
+        out["client_eval_acc"] = last.get("eval_acc")
+        out["client_eval_acc_global"] = last.get("eval_acc_global")
+    if "client_eval_acc_tail" in out and "client_eval_acc_global_tail" in out:
+        out["personalization_gain_tail"] = (
+            out["client_eval_acc_tail"] - out["client_eval_acc_global_tail"]
+        )
+    return {k: v for k, v in out.items() if v is not None}
 
 
 @app.main()
@@ -32,6 +70,8 @@ def main(grid: Grid, context: Context) -> None:
     a_max = int(context.run_config.get("a-max", 3))
     incorp_flag = str(context.run_config.get("incorp_status", "false")).lower()
     seed = int(context.run_config.get("seed", 0))
+    flags = resolve_ablation_flags(context.run_config)
+    print(f"[ablation] {flags.describe()}")
 
     random.seed(seed)
     np.random.seed(seed % (2**32 - 1))
@@ -69,14 +109,14 @@ def main(grid: Grid, context: Context) -> None:
         d_hat_global=d_hat_global,
         d_hat_local=d_hat_local,
         a_max=a_max,
+        use_local_adapter=flags.use_local_adapter,
     )
     arrays = ArrayRecord(global_model.get_global_arrays())
 
-    strategy = FedProxStrategy(
+    strategy_kwargs = dict(
         embedding_dim=hidden_dim,
         tau=float(context.run_config.get("tau", 15.0)),
         fraction_evaluate=fraction_evaluate,
-        proximal_mu=0.01,
         a_max=a_max,
         candidacy_quorum=float(context.run_config.get("candidacy-quorum", 0.5)),
         incorporation_monitor_rounds=int(
@@ -85,7 +125,12 @@ def main(grid: Grid, context: Context) -> None:
         incorporation_degrade_tolerance=float(
             context.run_config.get("incorporation-degrade-tolerance", 0.02)
         ),
+        enable_incorporation=flags.enable_incorporation,
     )
+    if flags.fl_algorithm == "fedprox":
+        strategy = FedProxStrategy(proximal_mu=flags.proximal_mu, **strategy_kwargs)
+    else:
+        strategy = FedAvgStrategy(**strategy_kwargs)
 
     held_out_subjects = parse_int_list_config(
         context.run_config.get("server-eval-subjects")
@@ -94,6 +139,7 @@ def main(grid: Grid, context: Context) -> None:
     output_dir = str(context.run_config.get("output-dir", "outputs/default_run"))
     forgetting_monitor = ForgettingMonitor(output_dir=output_dir)
     last_eval_metrics: dict = {}
+    server_eval_history: list[dict] = []
     evaluate_fn = None
 
     if held_out_subjects:
@@ -126,6 +172,7 @@ def main(grid: Grid, context: Context) -> None:
                 d_hat_global=d_hat_global,
                 d_hat_local=d_hat_local,
                 a_max=a_max,
+                use_local_adapter=flags.use_local_adapter,
             )
 
             eval_sd = eval_arrays.to_torch_state_dict()
@@ -163,6 +210,13 @@ def main(grid: Grid, context: Context) -> None:
             )
 
             metrics = {"server_eval_loss": loss, "server_eval_acc": acc}
+            server_eval_history.append(
+                {
+                    "round": int(current_round),
+                    "server_eval_acc": float(acc),
+                    "server_eval_loss": float(loss),
+                }
+            )
 
             if schedule is not None:
                 report = forgetting_monitor.update(
@@ -204,9 +258,20 @@ def main(grid: Grid, context: Context) -> None:
     print(f"Training completed.")
     torch.save(result.arrays.to_torch_state_dict(), "./final_global_model.pt")
 
+    window = int(context.run_config.get("report-window", 5))
+    client_eval_history = list(getattr(strategy, "client_eval_history", []))
+    final_metrics = _final_window_metrics(
+        server_eval_history, client_eval_history, window
+    )
+    last_eval_metrics.update(final_metrics)
+
     forgetting_monitor.save_run_summary(
         num_server_rounds=num_rounds,
         server_eval_enabled=bool(held_out_subjects),
         last_eval_metrics=last_eval_metrics,
         run_config={k: v for k, v in context.run_config.items()},
+        ablation=flags.as_dict(),
+        report_window=window,
+        server_eval_history=server_eval_history,
+        client_eval_history=client_eval_history,
     )
