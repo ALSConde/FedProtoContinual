@@ -260,10 +260,15 @@ def _load_client_data(msg: Message, context: Context):
 
 def _current_num_classes_seen(context: Context, current_round: int) -> Optional[int]:
     scenario = str(context.run_config.get("training-scenario", "federated")).lower()
+    
     raw_classes_per_step = context.run_config.get("classes-per-step", None)
     if raw_classes_per_step is None:
         return None
+    
     classes_per_step = resolve_classes_per_step(scenario, int(raw_classes_per_step))
+    if classes_per_step is None:
+        return None
+    
     num_classes_total = int(context.run_config["num-classes-total"])
     schedule = build_class_schedule(num_classes_total, classes_per_step)
     rounds_per_step = int(context.run_config.get("rounds-per-step", 1))
