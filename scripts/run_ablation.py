@@ -17,7 +17,22 @@ loo         leave-one-out from A4_full (no KD / no expansion / no incorporation 
             local adapter) -- the cumulative ladder confounds a component's effect with
             the order it is added in, leave-one-out does not.
 algorithm   A4_full (FedAvg) vs FedProx (one ALG_fedprox_mu<mu> profile per --mu value).
-all         the three above.
+central     CENTRAL: the centralized counterpart of A0 = the same pipeline with ONE client
+            holding the whole pool (partition-mode=pooled, min-nodes=1, expected-nodes=1).
+            Needs simulation.num-supernodes = 1 (see below), so it is NOT part of 'all'.
+all         ladder + loo + algorithm.
+
+Centralized baseline (suite 'central')
+--------------------------------------
+  1. federation.local.toml -> num-supernodes = 1, then python scripts/sync_federation_config.py
+  2. python scripts/run_ablation.py --suite central --seeds 0-9 <same --fixed as the ladder>
+  3. restore num-supernodes (e.g. 5) and sync again before the federated suites.
+The run aborts at round 0 if the federation size is not 1 (expected-nodes guard), so a
+forgotten sync can never produce a "centralized" run that is really federated.
+For a like-for-like comparison run the federated suites with --fixed partition-mode=pooled
+too: the union of the 5 Dirichlet clients is then exactly the pool the central client sees.
+Rounds x local-epochs is the epoch budget: keep the same --fixed num-server-rounds /
+local-epochs for CENTRAL and for the ladder.
 
 Results live in a flat layout, <results-dir>/<profile>/seed_<k>/, so a profile that
 belongs to several suites (A4_full) is run once and reused (grid_search's cache checks
@@ -123,7 +138,19 @@ def algorithm_profiles(mus: list[float]) -> dict[str, dict[str, Any]]:
     return profiles
 
 
+CENTRAL: dict[str, dict[str, Any]] = {
+    "CENTRAL": {
+        **LADDER["A0_protos"],
+        "partition-mode": "pooled",
+        "min-nodes": 1,
+        "expected-nodes": 1,
+    }
+}
+
+
 def build_suite(name: str, mus: list[float]) -> dict[str, dict[str, Any]]:
+    if name == "central":
+        return dict(CENTRAL)
     if name == "ladder":
         return dict(LADDER)
     if name == "loo":
@@ -206,6 +233,12 @@ def run_suite(args) -> None:
         f"Suite '{args.suite}': {len(profiles)} profiles x {len(seeds)} seeds "
         f"= {len(profiles) * len(seeds)} runs  ->  {out_root}"
     )
+    if args.suite == "central":
+        print(
+            "NOTE: needs simulation.num-supernodes = 1 in the active Flower config "
+            "(federation.local.toml + sync_federation_config.py); the server aborts "
+            "at startup if the federation size differs."
+        )
     if fixed:
         print(f"Fixed overrides: {fixed}")
 
@@ -393,7 +426,7 @@ def report(args) -> None:
     data = _collect(out_root)
     if args.suite != "all":
         keep = set(build_suite(args.suite, parse_floats(args.mu)))
-        data = {p: v for p, v in data.items() if p in keep}
+        data = {p: v for p, v in data.items() if p in keep or p.startswith("CENTRAL")}
     if not data:
         raise SystemExit(
             f"No <profile>/seed_*/summary.json found under {out_root} for suite '{args.suite}'"
@@ -401,7 +434,6 @@ def report(args) -> None:
 
     metrics = [m.strip() for m in args.metrics.split(",")]
     profiles = list(data)
-    # keep the canonical ladder order first
     order = [p for p in [*LADDER, *LOO] if p in profiles] + [
         p for p in profiles if p not in LADDER and p not in LOO
     ]
@@ -493,7 +525,7 @@ def main() -> None:
     )
     p.add_argument(
         "--suite",
-        choices=["ladder", "loo", "algorithm", "all"],
+        choices=["ladder", "loo", "algorithm", "central", "all"],
         default="ladder",
         help="Profiles to run (or, with --report, to include). Default: ladder.",
     )

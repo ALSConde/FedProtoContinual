@@ -113,7 +113,30 @@ def main(grid: Grid, context: Context) -> None:
     )
     arrays = ArrayRecord(global_model.get_global_arrays())
 
+    # Flower expects min_nodes >= 2, with 1 node we can force a centralized run by setting expected-nodes=1 (see below).
+    min_nodes = int(context.run_config.get("min-nodes", 2))
+    if min_nodes < 1:
+        raise ValueError(f"min-nodes must be >= 1, got {min_nodes}.")
+
+    # Optional guard: expected-nodes > 0 asserts the simulation really has that many
+    # supernodes. Prevents a "centralized" run (1 client) from silently running with the
+    # federation size left over in the global Flower config (or the opposite).
+    expected_nodes = int(context.run_config.get("expected-nodes", 0))
+    if expected_nodes > 0:
+        n_nodes = len(list(grid.get_node_ids()))
+        if n_nodes != expected_nodes:
+            raise RuntimeError(
+                f"expected-nodes={expected_nodes} but the federation has {n_nodes} "
+                "node(s). Set simulation.num-supernodes in federation.local.toml and run "
+                "scripts/sync_federation_config.py (or 'flwr federation simulation-config "
+                "--num-supernodes=N') before launching."
+            )
+        print(f"[federation] {n_nodes} node(s), as expected")
+
     strategy_kwargs = dict(
+        min_train_nodes=min_nodes,
+        min_evaluate_nodes=min_nodes,
+        min_available_nodes=min_nodes,
         embedding_dim=hidden_dim,
         tau=float(context.run_config.get("tau", 15.0)),
         fraction_evaluate=fraction_evaluate,
@@ -258,6 +281,8 @@ def main(grid: Grid, context: Context) -> None:
     print(f"Training completed.")
     torch.save(result.arrays.to_torch_state_dict(), "./final_global_model.pt")
 
+    # Final-window metrics: the mean over the last `report-window` evaluated rounds is
+    # far less noisy than the single last round, so it is what the ablation compares.
     window = int(context.run_config.get("report-window", 5))
     client_eval_history = list(getattr(strategy, "client_eval_history", []))
     final_metrics = _final_window_metrics(
