@@ -164,10 +164,10 @@ class AdapterIncorporationState:
                 continue
             votes.append(float(metrics["vote"]))
 
-            if not votes:
-                self._last_vote_favorable_fraction = None
-                self._reject_candidate(candidate)
-                return
+        if not votes:
+            self._last_vote_favorable_fraction = None
+            self._reject_candidate(candidate)
+            return
 
         favorable_fraction = sum(votes) / len(votes)
         self._last_vote_favorable_fraction = favorable_fraction
