@@ -16,6 +16,7 @@ class FedProxStrategy(FedProx):
         candidacy_quorum: float = 0.5,
         incorporation_monitor_rounds: int = 3,
         incorporation_degrade_tolerance: float = 0.02,
+        incorporation_baseline_window: int = 3,
         enable_incorporation: bool = True,
         **kwargs
     ):
@@ -29,6 +30,7 @@ class FedProxStrategy(FedProx):
             quorum=candidacy_quorum,
             monitor_rounds=incorporation_monitor_rounds,
             degrade_tolerance=incorporation_degrade_tolerance,
+            baseline_window=incorporation_baseline_window,
             enabled=enable_incorporation,
         )
 

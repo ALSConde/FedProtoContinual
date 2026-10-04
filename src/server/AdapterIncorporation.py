@@ -14,12 +14,18 @@ class AdapterIncorporationState:
         monitor_rounds: int = 3,
         degrade_tolerance: float = 0.02,
         enabled: bool = True,
+        baseline_window: int = 3,
     ) -> None:
+        # degrade_tolerance is relative: the fraction of the pre-incorporation accuracy
+        # that may be lost before reverting (0.05 -> revert if acc < 0.95 * baseline).
         self.enabled = enabled
         self.a_max = a_max
         self.quorum = quorum
         self.monitor_rounds = monitor_rounds
         self.degrade_tolerance = degrade_tolerance
+        # Pre-incorporation baseline = mean of the last `baseline_window` client-eval
+        # accuracies (including the vote round itself), to damp round-to-round noise.
+        self.baseline_window = max(1, int(baseline_window))
 
         self.topologies: list[dict] = []
 
@@ -31,7 +37,7 @@ class AdapterIncorporationState:
         self._latest_arrays_sd: Optional[dict] = None
         self._checkpoint_before_incorp: Optional[dict] = None
         self._reversion_watch: Optional[dict] = None
-        self._last_known_acc: Optional[float] = None
+        self._acc_history: list[float] = []
 
         self.total_candidacies_proposed: int = 0
         self.total_accepted: int = 0
@@ -39,6 +45,15 @@ class AdapterIncorporationState:
         self.total_reverted: int = 0
         self.total_confirmed: int = 0
         self._last_vote_favorable_fraction: Optional[float] = None
+
+    def _record_acc(self, acc: float) -> None:
+        self._acc_history.append(acc)
+        del self._acc_history[: -self.baseline_window]
+
+    def _baseline(self) -> Optional[float]:
+        if not self._acc_history:
+            return None
+        return sum(self._acc_history) / len(self._acc_history)
 
     def metrics_snapshot(self) -> dict:
         snapshot = {
@@ -123,16 +138,24 @@ class AdapterIncorporationState:
     ) -> None:
         replies = list(replies)
 
+        acc = None
+        if aggregated_metrics is not None and "eval_acc" in aggregated_metrics:
+            acc = float(aggregated_metrics["eval_acc"])
+
         if self.pending_candidate is not None:
+            # Vote rounds report the regular eval_acc, measured on the model without
+            # the candidate: it is part of the pre-incorporation baseline. Record it
+            # before tallying so that an acceptance freezes the window including it.
+            if acc is not None:
+                self._record_acc(acc)
             self._tally_votes(replies)
             return
 
-        if aggregated_metrics is not None and "eval_acc" in aggregated_metrics:
-            acc = float(aggregated_metrics["eval_acc"])
+        if acc is not None:
             if self._reversion_watch is not None:
                 self._check_reversion(acc)
             else:
-                self._last_known_acc = acc
+                self._record_acc(acc)
 
     def _reject_candidate(self, candidate: dict) -> None:
         self.total_rejected += 1
@@ -206,7 +229,10 @@ class AdapterIncorporationState:
 
         self.total_accepted += 1
         self._pending_full_arrays_override = new_full_sd
-        self._reversion_watch = {"rounds_elapsed": 0}
+        self._reversion_watch = {
+            "rounds_elapsed": 0,
+            "baseline_acc": self._baseline(),
+        }
         self._post_vote_signal = {
             "partition_id": candidate["partition_id"],
             "status": "accepted",
@@ -217,9 +243,19 @@ class AdapterIncorporationState:
         if watch is None:
             return
         watch["rounds_elapsed"] += 1
-        baseline = self._last_known_acc
+        # Fixed during the whole monitoring window: accuracy of the model right
+        # before the incorporation.
+        baseline = watch.get("baseline_acc")
+        threshold = (
+            (1.0 - self.degrade_tolerance) * baseline if baseline is not None else None
+        )
 
-        if baseline is not None and acc < baseline - self.degrade_tolerance:
+        if threshold is not None and acc < threshold:
+            print(
+                f"[incorporation reverted: acc={acc:.4f} < "
+                f"(1 - {self.degrade_tolerance}) * baseline={baseline:.4f} "
+                f"= {threshold:.4f}]"
+            )
             self._revert_last_incorporation()
         elif watch["rounds_elapsed"] >= self.monitor_rounds:
             accepted_pid = (
@@ -237,7 +273,10 @@ class AdapterIncorporationState:
                     "status": "confirmed",
                 }
 
-        self._last_known_acc = acc
+        if self._reversion_watch is None:
+            # Watch ended (confirmed or reverted): the model changed.
+            # Start a fresh baseline window from this round.
+            self._acc_history = [acc]
 
     def _revert_last_incorporation(self) -> None:
         checkpoint = self._checkpoint_before_incorp

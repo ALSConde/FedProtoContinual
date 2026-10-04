@@ -146,7 +146,10 @@ def main(grid: Grid, context: Context) -> None:
             context.run_config.get("incorporation-monitor-rounds", 3)
         ),
         incorporation_degrade_tolerance=float(
-            context.run_config.get("incorporation-degrade-tolerance", 0.02)
+            context.run_config.get("incorporation-degrade-tolerance", 0.05)
+        ),
+        incorporation_baseline_window=int(
+            context.run_config.get("incorporation-baseline-window", 3)
         ),
         enable_incorporation=flags.enable_incorporation,
     )

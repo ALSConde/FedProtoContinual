@@ -194,43 +194,53 @@ def short_local_adaptation(
     device: torch.device,
     max_steps: int,
 ):
+    """Adapt adapter_local, alpha_gate and the candidate (a private copy of it, which
+    is discarded after the vote) for exactly `max_steps` optimizer steps (mini-batches).
+    The loader is cycled when it has fewer than `max_steps` batches."""
     model.to(device)
     model.train()
+    candidate.to(device)
+    candidate.train()
 
-    trainable_params = list(model.adapter_local.parameters()) + list(
-        model.alpha_gate.parameters()
+    trainable_params = (
+        list(model.adapter_local.parameters())
+        + list(model.alpha_gate.parameters())
+        + list(candidate.parameters())
     )
     frozen_modules = [
         model.feature_extractor,
         model.adapter_global,
         model.incorporated_adapters,
         model.classifier,
-        candidate,
     ]
     saved_requires_grad = []
     for module in frozen_modules:
         for p in module.parameters():
             saved_requires_grad.append((p, p.requires_grad))
             p.requires_grad_(False)
+    for p in candidate.parameters():
+        p.requires_grad_(True)
 
     optimizer = torch.optim.Adam(trainable_params, lr=lr)
     steps_done = 0
     try:
-        if model.classifier.num_classes != 0:
-            for x, y in adapt_loader:
-                if steps_done >= max_steps:
-                    break
-                x, y = x.to(device), y.to(device)
-                optimizer.zero_grad()
-                h, _ = embed_with_extra_incorporated(model, x, candidate)
-                logits = model.classifier(h)
-                loss = F.cross_entropy(logits, y)
-                loss.backward()
-                optimizer.step()
-                steps_done += 1
+        if model.classifier.num_classes != 0 and len(adapt_loader) > 0:
+            while steps_done < max_steps:
+                for x, y in adapt_loader:
+                    if steps_done >= max_steps:
+                        break
+                    x, y = x.to(device), y.to(device)
+                    optimizer.zero_grad()
+                    h, _ = embed_with_extra_incorporated(model, x, candidate)
+                    logits = model.classifier(h)
+                    loss = F.cross_entropy(logits, y)
+                    loss.backward()
+                    optimizer.step()
+                    steps_done += 1
     finally:
         for p, requires_grad in saved_requires_grad:
             p.requires_grad_(requires_grad)
+        candidate.eval()
 
     return steps_done
 

@@ -548,6 +548,7 @@ def _handle_vote_round(
     model: FCLModel,
     known_consolidated: set,
     device: torch.device,
+    flags: AblationFlags,
 ) -> Message:
     config = msg.content["config"]
     own_partition_id = int(context.node_config["partition-id"])
@@ -556,9 +557,26 @@ def _handle_vote_round(
     (train_loader, valloader, _), _ = _load_client_data(msg, context)
     num_examples = len(valloader.dataset)
 
+    # Regular evaluation first (model without candidate, before any adaptation), so
+    # vote rounds report the same eval_* metrics as every other round.
+    if num_examples > 0:
+        eval_loss, eval_acc = test_fn(model, valloader, device)
+        if flags.use_local_adapter:
+            _, eval_acc_global = test_fn(model, valloader, device, branch="global")
+        else:
+            eval_acc_global = eval_acc
+    else:
+        eval_loss, eval_acc, eval_acc_global = 0.0, 0.0, 0.0
+    eval_metrics = {
+        "eval_loss": eval_loss,
+        "eval_acc": eval_acc,
+        "eval_acc_global": eval_acc_global,
+    }
+
     if own_partition_id == proposer_partition_id or num_examples == 0:
         metrics_reply = MetricRecord(
             {
+                **eval_metrics,
                 "vote": 0.0,
                 "acc_before": 0.0,
                 "acc_after": 0.0,
@@ -596,6 +614,7 @@ def _handle_vote_round(
 
     metrics_reply = MetricRecord(
         {
+            **eval_metrics,
             "vote": vote,
             "acc_before": acc_before,
             "acc_after": acc_after,
@@ -627,7 +646,9 @@ def evaluate(msg: Message, context: Context) -> Message:
     _load_global_prototypes(model, config, known_consolidated=known_consolidated)
 
     if config.get("vote_round", False):
-        return _handle_vote_round(msg, context, model, known_consolidated, device)
+        return _handle_vote_round(
+            msg, context, model, known_consolidated, device, flags
+        )
 
     (_, valloader, _), _ = _load_client_data(msg, context)
 
