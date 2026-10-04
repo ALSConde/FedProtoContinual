@@ -17,8 +17,10 @@ loo         leave-one-out from A4_full (no KD / no expansion / no incorporation 
             local adapter) -- the cumulative ladder confounds a component's effect with
             the order it is added in, leave-one-out does not.
 algorithm   A4_full (FedAvg) vs FedProx (one ALG_fedprox_mu<mu> profile per --mu value).
-central     CENTRAL: the centralized counterpart of A0 = the same pipeline with ONE client
-            holding the whole pool (partition-mode=pooled, min-nodes=1, expected-nodes=1).
+central     CENTRAL (upper bound: ONE client holding the whole pool, partition-mode=pooled)
+            and CENTRAL_UNION (like-for-like with the subject-mode ladder: ONE client holding
+            the union of the subject clients' retained data, partition-mode=subject-union).
+            Both: min-nodes=1, expected-nodes=1.
             Needs simulation.num-supernodes = 1 (see below), so it is NOT part of 'all'.
 all         ladder + loo + algorithm.
 
@@ -139,12 +141,21 @@ def algorithm_profiles(mus: list[float]) -> dict[str, dict[str, Any]]:
 
 
 CENTRAL: dict[str, dict[str, Any]] = {
+    # Upper bound: every window of every non-held-out subject, no class retention.
     "CENTRAL": {
         **LADDER["A0_protos"],
         "partition-mode": "pooled",
         "min-nodes": 1,
         "expected-nodes": 1,
-    }
+    },
+    # Like-for-like with the subject-mode ladder: the union of the data the 5 subject
+    # clients hold (same per-subject class retention), seen by ONE client.
+    "CENTRAL_UNION": {
+        **LADDER["A0_protos"],
+        "partition-mode": "subject-union",
+        "min-nodes": 1,
+        "expected-nodes": 1,
+    },
 }
 
 

@@ -23,7 +23,18 @@ VALID_DIRICHLET_MODES = (DIRICHLET_STATIC, DIRICHLET_DYNAMIC)
 
 PARTITION_SUBJECT = "subject"
 PARTITION_POOLED = "pooled"
-VALID_PARTITION_MODES = (PARTITION_SUBJECT, PARTITION_POOLED)
+# one client that holds the union of what every subject-mode client would get (same
+# per-subject class retention): the centralized counterpart of the subject-mode ladder.
+PARTITION_SUBJECT_UNION = "subject-union"
+VALID_PARTITION_MODES = (PARTITION_SUBJECT, PARTITION_POOLED, PARTITION_SUBJECT_UNION)
+
+# How a client's windows are split into train / validation.
+#   window     random window-level split (legacy). With stride < window_size neighbouring
+#              windows of the SAME recording overlap, so validation leaks into training.
+#   recording  whole recordings (subject, action, trial) go to one side only.
+VAL_SPLIT_WINDOW = "window"
+VAL_SPLIT_RECORDING = "recording"
+VALID_VAL_SPLITS = (VAL_SPLIT_WINDOW, VAL_SPLIT_RECORDING)
 
 _INERTIAL_FILENAME_RE = re.compile(
     r"a(?P<action>\d{1,2})_s(?P<subject>\d{1,2})_t(?P<trial>\d{1,2})_inertial",
@@ -77,6 +88,7 @@ class UTDMAHDInertial(Dataset):
 
         failed = 0
         self.windows: list[tuple[np.ndarray, int, int]] = []
+        self._recording_ids: list[int] = []
         for f in files:
             meta = _parse_meta_from_path(f)
             try:
@@ -100,6 +112,9 @@ class UTDMAHDInertial(Dataset):
                 for start in range(0, seq.shape[0] - window_size + 1, stride):
                     window = seq[start : start + window_size]
                     self.windows.append((window, action, subject))
+                    self._recording_ids.append(
+                        subject * 1_000_000 + action * 1_000 + meta["trial"]
+                    )
 
         if failed > 0:
             print(
@@ -130,6 +145,10 @@ class UTDMAHDInertial(Dataset):
 
     def subjects(self) -> np.ndarray:
         return np.array([s for _, _, s in self.windows])
+
+    def recording_ids(self) -> np.ndarray:
+        """One id per window, shared by all windows of the same (subject, action, trial)."""
+        return np.array(self._recording_ids)
 
 
 def resolve_classes_per_step(
@@ -302,6 +321,42 @@ def _apply_class_retention(
     return client_indices[keep_mask]
 
 
+def _split_train_val(
+    client_indices: np.ndarray,
+    dataset,
+    val_fraction: float,
+    round_seed: int,
+    val_split: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (train_idx, val_idx).
+
+    'window' reproduces the legacy behaviour exactly. 'recording' keeps every window of
+    a recording on the same side, stratified by class: for each class with >= 2
+    recordings, round(val_fraction * n_recordings) of them (at least 1, never all) go to
+    validation. A class with a single recording stays entirely in train, so heavy class
+    retention can leave a client with a small or empty validation set.
+    """
+    rng = np.random.RandomState(round_seed)
+    if val_split == VAL_SPLIT_WINDOW:
+        shuffled = client_indices.copy()
+        rng.shuffle(shuffled)
+        n_val = int(val_fraction * len(shuffled))
+        return shuffled[n_val:], shuffled[:n_val]
+
+    labels = dataset.labels[client_indices]
+    recordings = dataset.recording_ids()[client_indices]
+    val_mask = np.zeros(len(client_indices), dtype=bool)
+    for c in np.unique(labels):
+        idx_c = np.where(labels == c)[0]
+        recs = np.unique(recordings[idx_c])
+        if len(recs) < 2:
+            continue
+        rng.shuffle(recs)
+        n_val_rec = min(max(1, int(round(val_fraction * len(recs)))), len(recs) - 1)
+        val_mask[idx_c[np.isin(recordings[idx_c], recs[:n_val_rec])]] = True
+    return client_indices[~val_mask], client_indices[val_mask]
+
+
 @lru_cache(maxsize=4)
 def _get_cached_dataset(root: str, window_size: int, stride: int) -> UTDMAHDInertial:
     return UTDMAHDInertial(root, window_size, stride)
@@ -324,7 +379,13 @@ def load_data(
     dirichlet_mode: str = DIRICHLET_STATIC,
     held_out_subjects: Optional[list[int]] = None,
     partition_mode: str = PARTITION_SUBJECT,
+    val_split: str = VAL_SPLIT_WINDOW,
 ):
+
+    if val_split not in VALID_VAL_SPLITS:
+        raise ValueError(
+            f"Unknown val-split '{val_split}'. Expected one of {VALID_VAL_SPLITS}."
+        )
 
     if dirichlet_mode not in VALID_DIRICHLET_MODES:
         raise ValueError(
@@ -346,39 +407,55 @@ def load_data(
         else int(dataset.labels.max()) + 1
     )
 
-    if partition_mode == PARTITION_SUBJECT:
+    if partition_mode in (PARTITION_SUBJECT, PARTITION_SUBJECT_UNION):
         available_subjects = resolve_available_subjects(
             dataset.subjects(), held_out_subjects
         )
-        subject_id = assign_subject_to_partition(
-            available_subjects, partition_id, num_partitions
-        )
+        if partition_mode == PARTITION_SUBJECT:
+            owned_partitions = [partition_id]
+            subject_ids = [
+                assign_subject_to_partition(
+                    available_subjects, partition_id, num_partitions
+                )
+            ]
+        else:
+            if num_partitions != 1 or partition_id != 0:
+                raise ValueError(
+                    "partition-mode='subject-union' is the centralized counterpart "
+                    "and needs exactly one client (num_partitions=1, partition_id=0); "
+                    f"got num_partitions={num_partitions}, partition_id={partition_id}."
+                )
+            owned_partitions = list(range(len(available_subjects)))
+            subject_ids = list(available_subjects)
 
-        client_indices = np.where(dataset.subjects() == subject_id)[0]
-
-        client_indices = _apply_class_schedule(
-            client_indices,
-            dataset.labels,
-            classes_per_step,
-            current_round,
-            rounds_per_step,
-            num_classes_total,
-        )
-
-        retention_seed = (
-            seed + partition_id + current_round
-            if dirichlet_mode == DIRICHLET_DYNAMIC
-            else seed + partition_id
-        )
-        if len(client_indices) > 0:
-            client_indices = _apply_class_retention(
-                client_indices,
+        parts = []
+        for pid, subject_id in zip(owned_partitions, subject_ids):
+            idx = np.where(dataset.subjects() == subject_id)[0]
+            idx = _apply_class_schedule(
+                idx,
                 dataset.labels,
-                total_classes,
-                dirichlet_alpha,
-                retention_seed,
+                classes_per_step,
+                current_round,
+                rounds_per_step,
+                num_classes_total,
             )
-        round_seed = retention_seed
+            # Same seed formula a subject-mode client with this partition_id would use.
+            seed_p = (
+                seed + pid + current_round
+                if dirichlet_mode == DIRICHLET_DYNAMIC
+                else seed + pid
+            )
+            if len(idx) > 0:
+                idx = _apply_class_retention(
+                    idx, dataset.labels, total_classes, dirichlet_alpha, seed_p
+                )
+            parts.append(idx)
+        client_indices = np.concatenate(parts) if parts else np.array([], dtype=int)
+        round_seed = (
+            seed + owned_partitions[0] + current_round
+            if dirichlet_mode == DIRICHLET_DYNAMIC
+            else seed + owned_partitions[0]
+        )
     else:
         if held_out_subjects:
             pool_indices = np.where(~np.isin(dataset.subjects(), held_out_subjects))[0]
@@ -417,10 +494,9 @@ def load_data(
         empty_loader = DataLoader(Subset(dataset, []), batch_size=batch_size)
         return empty_loader, empty_loader, []
 
-    rng = np.random.RandomState(round_seed)
-    rng.shuffle(client_indices)
-    n_val = int(val_fraction * len(client_indices))
-    val_idx, train_idx = client_indices[:n_val], client_indices[n_val:]
+    train_idx, val_idx = _split_train_val(
+        client_indices, dataset, val_fraction, round_seed, val_split
+    )
 
     train_loader = DataLoader(
         Subset(dataset, train_idx), batch_size=batch_size, shuffle=True
