@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Optional
 import torch.nn.functional as F
 import torch
@@ -18,20 +19,29 @@ def normalized_sq_distance(
     return sq_dist.mean()
 
 
+@lru_cache(maxsize=64)
+def _known_ids(known: frozenset, device: torch.device) -> torch.Tensor:
+    return torch.tensor(sorted(known), dtype=torch.long, device=device)
+
+
 def split_by_know(y: torch.Tensor, known_consolidated: set) -> torch.Tensor:
-    return torch.tensor(
-        [int(label) in known_consolidated for label in y.tolist()],
-        device=y.device,
-    )
+    """Boolean mask: True where the label belongs to an already consolidated class.
+    Vectorised (no y.tolist(), no per-sample Python loop, no host sync)."""
+    if not known_consolidated:
+        return torch.zeros_like(y, dtype=torch.bool)
+    return torch.isin(y, _known_ids(frozenset(known_consolidated), y.device))
 
 
 def local_class_prototypes(h_new: torch.Tensor, y_new: torch.Tensor) -> torch.Tensor:
+    """Per-sample target = mean of the L2-normalised embeddings of the sample's class."""
     h_n = F.normalize(h_new, dim=1)
-    proto = torch.zeros_like(h_n)
-    for c in y_new.unique():
-        mask = y_new == c
-        proto[mask] = h_n[mask].mean(dim=0, keepdim=True)
-    return proto.detach()
+    uniq, inv = torch.unique(y_new, return_inverse=True)
+    sums = torch.zeros(
+        uniq.numel(), h_n.size(1), device=h_n.device, dtype=h_n.dtype
+    ).index_add_(0, inv, h_n.detach())
+    counts = torch.bincount(inv, minlength=uniq.numel()).clamp_min(1)
+    proto = sums / counts.unsqueeze(1).to(h_n.dtype)
+    return proto[inv].detach()
 
 
 def prototype_alignment_loss(
@@ -40,26 +50,30 @@ def prototype_alignment_loss(
     global_prototypes: torch.Tensor,
     known_consolidated: set,
 ) -> Optional[torch.Tensor]:
-    cons_mask = split_by_know(y, known_consolidated)
-    terms = []
-
-    if cons_mask.any():
-        h_cons, y_cons = h[cons_mask], y[cons_mask]
-        proto_cons = global_prototypes[y_cons]
-        d_cons = normalized_sq_distance(h_cons, proto_cons, reduction="none")
-        if d_cons is not None:
-            terms.append(d_cons)
-
-    if (~cons_mask).any():
-        h_new, y_new = h[~cons_mask], y[~cons_mask]
-        proto_new = local_class_prototypes(h_new, y_new)
-        d_new = normalized_sq_distance(h_new, proto_new, reduction="none")
-        if d_new is not None:
-            terms.append(d_new)
-
-    if not terms:
+    """Same as the previous masked/looped version, without boolean indexing.
+    Consolidated classes are pulled towards the server prototype; new classes towards
+    the detached mean of the batch's normalised embeddings of that class."""
+    if h.numel() == 0:
         return None
-    return torch.cat(terms).mean()
+    cons = split_by_know(y, known_consolidated)
+    h_n = F.normalize(h, dim=1)
+
+    rows = global_prototypes.size(0)
+    t_cons = global_prototypes[y.clamp(max=rows - 1)]  # only used where cons is True
+
+    # Group by class id directly. The classifier is expanded to cover every class of the
+    # loader before training, so y < rows and no torch.unique is needed.
+    idx = y.clamp(max=rows - 1)
+    w_new = (~cons).to(h_n.dtype)
+    sums = torch.zeros(rows, h_n.size(1), device=h.device, dtype=h_n.dtype).index_add_(
+        0, idx, h_n.detach() * w_new.unsqueeze(1)
+    )
+    cnts = torch.zeros(rows, device=h.device, dtype=h_n.dtype).index_add_(0, idx, w_new)
+    t_new = sums[idx] / cnts[idx].clamp_min(1.0).unsqueeze(1)
+
+    target = torch.where(cons.unsqueeze(1), t_cons, t_new)
+    d = F.mse_loss(h_n, F.normalize(target, dim=1), reduction="none").sum(dim=1)
+    return d.mean()
 
 
 def distillation_loss(

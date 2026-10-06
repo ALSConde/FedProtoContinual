@@ -170,49 +170,51 @@ def evaluate_global_model(
     test_loader: DataLoader,
     device: torch.device,
     allowed_classes: Optional[set] = None,
+    chunk_size: int = 512,
 ) -> tuple[float, float, dict[int, float], dict[int, int]]:
     model.eval()
-    total_loss, total_correct, total_n = 0.0, 0, 0
-    class_correct: dict[int, int] = {}
-    class_total: dict[int, int] = {}
-
-    for x, y in test_loader:
-        if allowed_classes is not None:
-            mask = torch.tensor(
-                [int(label) in allowed_classes for label in y], dtype=torch.bool
-            )
-            if not mask.any():
-                continue
-            x, y = x[mask], y[mask]
-
-        x, y = x.to(device), y.to(device)
-        h = _global_embed(model, x)
-
-        valid_mask = y < model.classifier.num_classes
-        if not valid_mask.any():
-            continue
-        y_valid, h_valid = y[valid_mask], h[valid_mask]
-
-        logits = model.classifier(h_valid)
-        loss = F.cross_entropy(logits, y_valid, reduction="sum")
-        preds = logits.argmax(dim=1)
-
-        total_loss += loss.item()
-        total_n += len(y_valid)
-        total_correct += (preds == y_valid).sum().item()
-
-        for c in y_valid.unique():
-            c_int = int(c.item())
-            c_mask = y_valid == c
-            class_total[c_int] = class_total.get(c_int, 0) + int(c_mask.sum().item())
-            class_correct[c_int] = class_correct.get(c_int, 0) + int(
-                (preds[c_mask] == c).sum().item()
-            )
-
-    if total_n == 0:
+    num_classes = model.classifier.num_classes
+    if num_classes == 0:
         return 0.0, 0.0, {}, {}
 
-    avg_loss = total_loss / total_n
-    overall_acc = total_correct / total_n
-    per_class_acc = {c: class_correct.get(c, 0) / class_total[c] for c in class_total}
-    return avg_loss, overall_acc, per_class_acc, dict(class_total)
+    xs, ys = [], []
+    for x, y in test_loader:  # CPU tensors: filtering here costs no GPU sync
+        if allowed_classes is not None:
+            keep = torch.isin(y, torch.tensor(sorted(allowed_classes), dtype=y.dtype))
+            if not keep.any():
+                continue
+            x, y = x[keep], y[keep]
+        xs.append(x)
+        ys.append(y)
+    if not xs:
+        return 0.0, 0.0, {}, {}
+    X, Y = torch.cat(xs).to(device), torch.cat(ys).to(device)
+
+    loss_sum = torch.zeros((), device=device)
+    n_total = torch.zeros((), device=device)
+    n_correct = torch.zeros((), device=device)
+    class_total = torch.zeros(num_classes, device=device)
+    class_correct = torch.zeros(num_classes, device=device)
+
+    for i in range(0, X.shape[0], chunk_size):
+        x, y = X[i : i + chunk_size], Y[i : i + chunk_size]
+        h = _global_embed(model, x)
+        valid = (y < num_classes).to(h.dtype)  # classes the classifier does not know yet are skipped
+        y_safe = y.clamp(max=num_classes - 1)
+        logits = model.classifier(h)
+        ce = F.cross_entropy(logits, y_safe, reduction="none")
+        hit = (logits.argmax(dim=1) == y_safe).to(h.dtype) * valid
+        loss_sum = loss_sum + (ce * valid).sum()
+        n_total = n_total + valid.sum()
+        n_correct = n_correct + hit.sum()
+        class_total.index_add_(0, y_safe, valid)
+        class_correct.index_add_(0, y_safe, hit)
+
+    total_n = int(n_total.item())
+    if total_n == 0:
+        return 0.0, 0.0, {}, {}
+    ct, cc = class_total.cpu(), class_correct.cpu()
+    seen = ct.nonzero(as_tuple=True)[0].tolist()
+    per_class_acc = {c: float(cc[c] / ct[c]) for c in seen}
+    per_class_n = {c: int(ct[c]) for c in seen}
+    return float(loss_sum) / total_n, float(n_correct) / total_n, per_class_acc, per_class_n

@@ -14,6 +14,33 @@ from src.utils.losses.Losses import (
 )
 
 
+def _device_batches(
+    loader: DataLoader, device: torch.device, max_classes: Optional[int] = None
+):
+    """Same batches, in the same order, as iterating `loader`, but moved to `device`
+    with ONE host->device copy per tensor instead of one per batch (every pageable
+    copy synchronises the stream, which is very slow when the GPU is shared)."""
+    xs, ys, sizes = [], [], []
+    for x, y in loader:
+        xs.append(x)
+        ys.append(y)
+        sizes.append(len(y))
+    if not xs:
+        return []
+    X, Y = torch.cat(xs), torch.cat(ys)  # still on CPU: this check costs no GPU sync
+    if max_classes is not None and int(Y.max()) >= max_classes:
+        raise ValueError(
+            f"label {int(Y.max())} >= {max_classes} classes: expand the classifier and "
+            "the prototype memory before training"
+        )
+    X, Y = X.to(device), Y.to(device)
+    out, i = [], 0
+    for n in sizes:
+        out.append((X[i : i + n], Y[i : i + n]))
+        i += n
+    return out
+
+
 # Function to load data -- With sintetic data for testing purposes
 def load_data(
     partition_id: int,
@@ -89,17 +116,13 @@ def train_fn(
         prox_ref = [p.detach().clone() for p in prox_params]
 
     optmizer = torch.optim.Adam(model.parameters(), lr=lr)
-    running_loss, n_batches = 0.0, 0
+    running_loss, n_batches = 0.0, 0  # running_loss becomes a device tensor (no per-step sync)
+    memory.expand(model.classifier.num_classes)
 
     for _ in range(epochs):
-        for (
-            x,
-            y,
-        ) in trainloader:
-            x, y = x.to(device), y.to(device)
-
+        for x, y in _device_batches(trainloader, device, max_classes=memory.num_classes):
             h, h_shared = model.embed_both(x)
-            memory.update(h_shared, y)
+            memory.update(h_shared, y, check_bounds=False)
 
             if model.classifier.num_classes == 0:
                 continue  # cold start: without prototypes yet, just accumulate statistics
@@ -138,10 +161,10 @@ def train_fn(
             loss.backward()
             optmizer.step()
 
-            running_loss += loss.item()
+            running_loss = running_loss + loss.detach()
             n_batches += 1
 
-    return running_loss / max(n_batches, 1)
+    return float(running_loss) / max(n_batches, 1)
 
 
 def embed_with_extra_incorporated(
@@ -176,14 +199,14 @@ def evaluate_with_candidate(
                 continue
             h, _ = embed_with_extra_incorporated(model, x, candidate)
             logits = model.classifier(h)
-            loss_sum += F.cross_entropy(logits, y).item()
-            correct += (logits.argmax(dim=1) == y).sum().item()
+            loss_sum += F.cross_entropy(logits, y).detach()
+            correct += (logits.argmax(dim=1) == y).sum()
             total += y.size(0)
             n_batches += 1
 
     if total == 0:
         return 0.0, 0.0
-    return loss_sum / max(n_batches, 1), correct / total
+    return float(loss_sum) / max(n_batches, 1), float(correct) / total
 
 
 def short_local_adaptation(
@@ -292,14 +315,14 @@ def test_fn(
                 continue
 
             logits = model.classifier(h)
-            loss_sum += F.cross_entropy(logits, y).item()
-            correct += (logits.argmax(dim=1) == y).sum().item()
+            loss_sum += F.cross_entropy(logits, y).detach()
+            correct += (logits.argmax(dim=1) == y).sum()
             total += y.size(0)
             n_batches += 1
 
     if total == 0:
         return 0.0, 0.0
-    return loss_sum / max(n_batches, 1), correct / total
+    return float(loss_sum) / max(n_batches, 1), float(correct) / total
 
 
 def compute_local_contribution_ratio(
@@ -308,14 +331,13 @@ def compute_local_contribution_ratio(
     model.eval()
     total_ratio, total_n = 0.0, 0
     with torch.no_grad():
-        for x, _ in loader:
-            x = x.to(device)
+        for x, y in _device_batches(loader, device):
             ratios = model.local_contribution_ratio(x)
-            total_ratio += ratios.sum().item()
+            total_ratio += ratios.sum()
             total_n += ratios.numel()
     if total_n == 0:
         return None
-    return total_ratio / total_n
+    return float(total_ratio) / total_n
 
 
 def compute_expansion_signal(
@@ -326,34 +348,32 @@ def compute_expansion_signal(
     device: torch.device,
 ) -> Optional[dict]:
     model.eval()
-    h_cons_list, y_cons_list = [], []
-    h_new_list, y_new_list = [], []
 
     with torch.no_grad():
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            h = model.embed(x)
-            cons_mask = split_by_know(y, known_consolidated)
-            if cons_mask.any():
-                h_cons_list.append(h[cons_mask])
-                y_cons_list.append(y[cons_mask])
-            if (~cons_mask).any():
-                h_new_list.append(h[~cons_mask])
-                y_new_list.append(y[~cons_mask])
-
-        if not h_cons_list and not h_new_list:
+        h_all, y_all = [], []
+        for x, y in _device_batches(loader, device):
+            h_all.append(model.embed(x))
+            y_all.append(y)
+        if not h_all:
             return None
 
-        h_cons = torch.cat(h_cons_list) if h_cons_list else None
-        y_cons = torch.cat(y_cons_list) if y_cons_list else None
+        # split once instead of per batch
+        H, Y = torch.cat(h_all), torch.cat(y_all)
+        cons_mask = split_by_know(Y, known_consolidated)
+        h_cons, y_cons = H[cons_mask], Y[cons_mask]
+        h_new, y_new = H[~cons_mask], Y[~cons_mask]
+        if h_cons.shape[0] == 0:
+            h_cons = y_cons = None
+        if h_new.shape[0] == 0:
+            h_new = y_new = None
+        if h_cons is None and h_new is None:
+            return None
         proto_cons = (
             model.classifier.prototypes[y_cons]
             if y_cons is not None and len(y_cons) > 0
             else None
         )
 
-        h_new = torch.cat(h_new_list) if h_new_list else None
-        y_new = torch.cat(y_new_list) if y_new_list else None
         proto_new = (
             local_class_prototypes(h_new, y_new)
             if h_new is not None and len(h_new) > 0 and y_new is not None

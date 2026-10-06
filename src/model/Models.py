@@ -138,7 +138,6 @@ class FeatureExtractor(nn.Module):
             input_size=128,
             hidden_size=hidden_dim,
             batch_first=True,
-            dropout=dropout,
             num_layers=1
         )
         self.dropout = nn.Dropout(dropout)

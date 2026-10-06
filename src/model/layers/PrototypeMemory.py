@@ -44,7 +44,9 @@ class PrototypeMemory:
     # Accumulation during training
     # ------------------------------------------------------------------
 
-    def update(self, h: torch.Tensor, labels: torch.Tensor) -> None:
+    def update(
+        self, h: torch.Tensor, labels: torch.Tensor, check_bounds: bool = True
+    ) -> None:
         """
         Accumulates embeddings and counts for each class present in the batch.
 
@@ -60,14 +62,13 @@ class PrototypeMemory:
         h = h.detach().to(self.device)
         labels = labels.to(self.device)
 
-        max_label = int(labels.max().item()) + 1
-        if max_label > self.num_classes:
-            self.expand(max_label)
+        if check_bounds:
+            max_label = int(labels.max().item()) + 1
+            if max_label > self.num_classes:
+                self.expand(max_label)
 
-        for c in labels.unique():
-            mask = labels == c
-            self._sum_h[c]  += h[mask].sum(dim=0)
-            self._counts[c] += mask.sum()
+        self._sum_h.index_add_(0, labels, h)
+        self._counts.index_add_(0, labels, torch.ones_like(labels))
 
     # ------------------------------------------------------------------
     # Aggregation and reset
