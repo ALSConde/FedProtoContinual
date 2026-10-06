@@ -275,10 +275,55 @@ def assign_subject_to_partition(
     return available_subjects[partition_id]
 
 
-def class_retention_fractions(num_classes: int, alpha: float, seed: int) -> np.ndarray:
+def class_retention_fractions(
+    num_classes, alpha, seed, target_keep=0.25, class_counts=None
+):
+    """Generate deterministic, class-specific data-retention fractions.
+
+    A Dirichlet sample provides relative retention preferences for the
+    classes. When ``target_keep`` is specified, those preferences are scaled
+    until their weighted mean reaches the requested retention level, with
+    every class capped at ``1.0``. If ``target_keep`` is ``None``, the
+    preferences are normalized by their maximum instead.
+
+    Args:
+        num_classes: Number of class fractions to generate.
+        alpha: Positive Dirichlet concentration parameter. Smaller values
+            produce a more uneven allocation between classes.
+        seed: Seed for the local random-number generator, ensuring that the
+            generated fractions are reproducible.
+        target_keep: Desired weighted mean retention in the range ``[0, 1]``.
+            Set to ``None`` to skip target-based scaling. Defaults to ``0.25``.
+        class_counts: Optional per-class sample counts used as weights when
+            matching ``target_keep``. Uniform weights are used when omitted.
+
+    Returns:
+        A NumPy array of length ``num_classes`` containing values in
+        ``[0.0, 1.0]``.
+    """
     rng = np.random.RandomState(seed)
-    proportions = rng.dirichlet(np.repeat(alpha, num_classes))
-    return proportions / proportions.max()
+    p = rng.dirichlet(np.repeat(alpha, num_classes))
+    if target_keep is None:
+        return p / p.max()
+    w = (
+        np.ones(num_classes)
+        if class_counts is None
+        else np.asarray(class_counts, float)
+    )
+    w = w / w.sum()
+    f = lambda s: float((w * np.minimum(1.0, s * p)).sum())
+    with np.errstate(over="ignore"):
+        hi = min(1.0 / p[p > 0].min(), 1e300)
+    if f(hi) <= target_keep:
+        return np.minimum(1.0, hi * p)
+    lo_log, hi_log = np.log(1e-12), np.log(hi)
+    for _ in range(200):
+        mid = 0.5 * (lo_log + hi_log)
+        if f(np.exp(mid)) < target_keep:
+            lo_log = mid
+        else:
+            hi_log = mid
+    return np.minimum(1.0, np.exp(hi_log) * p)
 
 
 def _apply_class_schedule(
@@ -308,7 +353,11 @@ def _apply_class_retention(
     alpha: float,
     seed: int,
 ) -> np.ndarray:
-    keep_fraction = class_retention_fractions(num_classes_total, alpha, seed)
+    labels_for_client = all_labels[client_indices]
+    class_counts = np.bincount(labels_for_client, minlength=num_classes_total)
+    keep_fraction = class_retention_fractions(
+        num_classes_total, alpha, seed, target_keep=0.25, class_counts=class_counts
+    )
     labels_for_client = all_labels[client_indices]
     rng = np.random.RandomState(seed)
 
@@ -316,7 +365,7 @@ def _apply_class_retention(
     for c in np.unique(labels_for_client):
         idx_c = np.where(labels_for_client == c)[0]
         rng.shuffle(idx_c)
-        n_keep = max(1, int(round(keep_fraction[c] * len(idx_c))))
+        n_keep = max(0, int(round(keep_fraction[c] * len(idx_c))))
         keep_mask[idx_c[:n_keep]] = True
     return client_indices[keep_mask]
 

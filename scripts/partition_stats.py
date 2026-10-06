@@ -123,20 +123,23 @@ def main() -> None:
             # divergence of each client from the federation-wide class distribution
             glob = np.sum(per_client_counts, axis=0)
             glob_p = glob / glob.sum() if glob.sum() > 0 else glob
+            covered = int((glob > 0).sum())  # classes present in at least one client
             for pid, counts in enumerate(per_client_counts):
                 p = counts / counts.sum() if counts.sum() > 0 else counts
-                rows[-(num_clients - pid)]["jsd_vs_global"] = jsd(p, glob_p)
+                row = rows[-(num_clients - pid)]
+                row["jsd_vs_global"] = jsd(p, glob_p)
+                row["global_covered"] = covered
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     cols = ["alpha", "seed", "client", "n_train", "n_val", "n_classes",
-            "entropy_nats", "entropy_norm", "jsd_vs_global"]
+            "entropy_nats", "entropy_norm", "jsd_vs_global", "global_covered"]
     with open(out / "per_client.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         w.writerows(rows)
 
-    metrics = ["n_train", "n_val", "n_classes", "entropy_norm", "jsd_vs_global"]
+    metrics = ["n_train", "n_val", "n_classes", "entropy_norm", "jsd_vs_global", "global_covered"]
     summary = []
     for alpha in args.alphas:
         sel = [r for r in rows if r["alpha"] == alpha]
@@ -145,20 +148,28 @@ def main() -> None:
             vals = np.array([r[m] for r in sel], dtype=float)
             row[f"{m}_mean"] = float(vals.mean())
             row[f"{m}_std"] = float(vals.std(ddof=1)) if len(vals) > 1 else 0.0
+        # worst cases: clients that can break candidacy/voting or training
+        row["n_train_min"] = min(r["n_train"] for r in sel)
+        row["n_val_min"] = min(r["n_val"] for r in sel)
+        row["n_classes_min"] = min(r["n_classes"] for r in sel)
+        row["global_covered_min"] = min(r["global_covered"] for r in sel)
         summary.append(row)
     with open(out / "summary.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(summary[0].keys()))
         w.writeheader()
         w.writerows(summary)
 
-    print(f"{'alpha':>8} {'n_train':>14} {'n_classes':>12} {'H_norm':>12} {'JSD':>12}")
+    print(f"{'alpha':>8} {'n_train':>14} {'n_classes':>12} {'H_norm':>12} {'JSD':>12} "
+          f"{'cover(min)':>10} {'min tr/val':>11}")
     for r in summary:
         print(
             f"{r['alpha']:>8g} "
             f"{r['n_train_mean']:>7.0f}±{r['n_train_std']:<6.0f} "
             f"{r['n_classes_mean']:>6.1f}±{r['n_classes_std']:<4.1f} "
             f"{r['entropy_norm_mean']:>6.3f}±{r['entropy_norm_std']:<4.3f} "
-            f"{r['jsd_vs_global_mean']:>6.3f}±{r['jsd_vs_global_std']:<4.3f}"
+            f"{r['jsd_vs_global_mean']:>6.3f}±{r['jsd_vs_global_std']:<4.3f} "
+            f"{r['global_covered_mean']:>5.1f}({r['global_covered_min']:>2d}) "
+            f"{r['n_train_min']:>5d}/{r['n_val_min']:<4d}"
         )
 
 
