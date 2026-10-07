@@ -172,6 +172,8 @@ def evaluate_global_model(
     allowed_classes: Optional[set] = None,
     chunk_size: int = 512,
 ) -> tuple[float, float, dict[int, float], dict[int, int]]:
+    """Same results as the previous per-batch version, with no per-class Python loop and
+    a single host sync at the end (it used ~50 syncs per batch)."""
     model.eval()
     num_classes = model.classifier.num_classes
     if num_classes == 0:
@@ -215,6 +217,6 @@ def evaluate_global_model(
         return 0.0, 0.0, {}, {}
     ct, cc = class_total.cpu(), class_correct.cpu()
     seen = ct.nonzero(as_tuple=True)[0].tolist()
-    per_class_acc = {c: float(cc[c] / ct[c]) for c in seen}
+    per_class_acc = {c: float(cc[c]) / float(ct[c]) for c in seen}
     per_class_n = {c: int(ct[c]) for c in seen}
     return float(loss_sum) / total_n, float(n_correct) / total_n, per_class_acc, per_class_n
