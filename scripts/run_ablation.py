@@ -340,6 +340,13 @@ _ROW_KEYS = {
     "client_eval_acc_tail",
     "client_eval_acc_global_tail",
     "personalization_gain_tail",
+    "params_base_total",
+    "params_shared",
+    "params_incorporated",
+    "client_params_total",
+    "client_params_base",
+    "client_params_expansion_overhead",
+    "client_params_growth_ratio",
 }
 
 

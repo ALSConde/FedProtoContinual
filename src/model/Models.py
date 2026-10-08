@@ -9,6 +9,16 @@ from src.model.layers.AlphaGate import AlphaGate
 from src.model.layers.PrototypeClassifier import PrototypeClassifier
 
 
+def count_parameters(module: nn.Module, trainable_only: bool = False) -> int:
+    """Number of scalar parameters (nn.Parameter) of `module`.
+    Buffers are NOT counted: they are not learned by gradient,
+    they come from the server's prototype aggregation.
+    """
+    return sum(
+        p.numel() for p in module.parameters() if p.requires_grad or not trainable_only
+    )
+
+
 class TransformerBackbone(nn.Module):
     def __init__(
         self,
@@ -133,12 +143,9 @@ class FeatureExtractor(nn.Module):
         self.norm2 = nn.GroupNorm(num_groups=8, num_channels=64)
         self.conv3 = nn.Conv1d(64, out_channels=128, kernel_size=5, stride=2, padding=1)
         self.norm3 = nn.GroupNorm(num_groups=8, num_channels=128)
- 
+
         self.gru = nn.GRU(
-            input_size=128,
-            hidden_size=hidden_dim,
-            batch_first=True,
-            num_layers=1
+            input_size=128, hidden_size=hidden_dim, batch_first=True, num_layers=1
         )
         self.dropout = nn.Dropout(dropout)
 
@@ -217,6 +224,56 @@ class FCLModel(nn.Module):
         alpha = self.alpha_gate.alpha_vector()
         scaled_local = alpha * delta_local
         return scaled_local.norm(dim=-1) / (x_shared.norm(dim=-1) + 1e-8)
+
+    def parameter_report(self) -> dict[str, int]:
+        """Parameter counts per component, to compare runs with/without expansions.
+
+        Components that are inactive (adapter_local / alpha_gate when
+        use_local_adapter=False) count as 0, so ablation profiles are comparable.
+
+        total        : everything the model holds (what one client runs at inference)
+        shared       : feature_extractor + adapter_global + incorporated adapters
+                       (the part exchanged with the server)
+        local        : adapter_local + alpha_gate + classifier (stays on the client)
+        trainable    : subset of `total` with requires_grad=True
+        """
+        active_local = self.use_local_adapter
+        parts = {
+            "feature_extractor": count_parameters(self.feature_extractor),
+            "adapter_global": count_parameters(self.adapter_global),
+            "adapter_local": (
+                count_parameters(self.adapter_local) if active_local else 0
+            ),
+            "alpha_gate": count_parameters(self.alpha_gate) if active_local else 0,
+            "incorporated_adapters": count_parameters(self.incorporated_adapters),
+            "classifier": count_parameters(self.classifier),
+        }
+        shared = (
+            parts["feature_extractor"]
+            + parts["adapter_global"]
+            + parts["incorporated_adapters"]
+        )
+        local = parts["adapter_local"] + parts["alpha_gate"] + parts["classifier"]
+        trainable = sum(
+            count_parameters(m, trainable_only=True)
+            for m in (
+                self.feature_extractor,
+                self.adapter_global,
+                self.incorporated_adapters,
+                self.classifier,
+            )
+        )
+        if active_local:
+            trainable += count_parameters(
+                self.adapter_local, trainable_only=True
+            ) + count_parameters(self.alpha_gate, trainable_only=True)
+        return {
+            **parts,
+            "shared": shared,
+            "local": local,
+            "total": shared + local,
+            "trainable": trainable,
+        }
 
     def global_branch_parameters(self) -> list[nn.Parameter]:
         params: list[nn.Parameter] = []

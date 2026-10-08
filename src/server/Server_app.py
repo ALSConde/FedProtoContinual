@@ -111,6 +111,11 @@ def main(grid: Grid, context: Context) -> None:
         a_max=a_max,
         use_local_adapter=flags.use_local_adapter,
     )
+    base_report = global_model.parameter_report()
+    print(
+        f"[params] base model (no expansion): total={base_report['total']:,} "
+        f"| shared={base_report['shared']:,} | local={base_report['local']:,}"
+    )
     arrays = ArrayRecord(global_model.get_global_arrays())
 
     # Flower expects min_nodes >= 2, with 1 node we can force a centralized run by setting expected-nodes=1 (see below).
@@ -222,6 +227,7 @@ def main(grid: Grid, context: Context) -> None:
 
             eval_model.load_incorporated_topology(strategy.incorporation.topologies)
             eval_model.set_global_arrays(eval_sd)
+            eval_report = eval_model.parameter_report()
             eval_model.classifier.update_from_global(mu_all, ids_all)
             eval_model.to(device)
 
@@ -236,6 +242,11 @@ def main(grid: Grid, context: Context) -> None:
             )
 
             metrics = {"server_eval_loss": loss, "server_eval_acc": acc}
+            # Global (shared) model size, base vs. current: grows only through
+            # incorporated adapters (local expansions never leave the client).
+            metrics["params_shared"] = eval_report["shared"]
+            metrics["params_shared_base"] = base_report["shared"]
+            metrics["params_incorporated"] = eval_report["incorporated_adapters"]
             server_eval_history.append(
                 {
                     "round": int(current_round),
@@ -293,6 +304,23 @@ def main(grid: Grid, context: Context) -> None:
     )
     last_eval_metrics.update(final_metrics)
 
+    # Parameter counters: base architecture vs. final (what the expansions cost).
+    client_param_history = list(getattr(strategy, "client_param_history", []))
+    last_eval_metrics["params_base_total"] = base_report["total"]
+    if client_param_history:
+        for key, value in client_param_history[-1].items():
+            if key != "round":
+                last_eval_metrics[f"client_{key}"] = value
+        base = client_param_history[-1].get("params_base")
+        total = client_param_history[-1].get("params_total")
+        if base and total is not None:
+            last_eval_metrics["client_params_growth_ratio"] = total / base
+            print(
+                "[params] final (mean over clients, last round): "
+                f"base={base:,.0f} | total={total:,.0f} | "
+                f"overhead={total - base:,.0f} ({100.0 * (total - base) / base:.2f}%)"
+            )
+
     forgetting_monitor.save_run_summary(
         num_server_rounds=num_rounds,
         server_eval_enabled=bool(held_out_subjects),
@@ -302,4 +330,5 @@ def main(grid: Grid, context: Context) -> None:
         report_window=window,
         server_eval_history=server_eval_history,
         client_eval_history=client_eval_history,
+        client_param_history=client_param_history,
     )

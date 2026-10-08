@@ -35,6 +35,7 @@ class FedAvgStrategy(FedAvg):
         )
 
         self.client_eval_history: list[dict] = []
+        self.client_param_history: list[dict] = []
         self.incorp_flag: str = "false"
 
     def configure_train(
@@ -84,6 +85,14 @@ class FedAvgStrategy(FedAvg):
                 self._latest_proto_bytes = pickle.dumps((mu_all, ids_all))
 
         self.incorporation.on_aggregate_train(replies)
+
+        if metrics is not None:
+            entry: dict = {"round": int(server_round)}
+            for key in metrics.keys():
+                if str(key).startswith("params_"):
+                    entry[key] = float(metrics[key])
+            if len(entry) > 1:
+                self.client_param_history.append(entry)
         
         if metrics is not None and self.incorp_flag != "false":
             for k, v in self.incorporation.metrics_snapshot().items():

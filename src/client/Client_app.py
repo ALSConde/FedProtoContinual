@@ -1,3 +1,5 @@
+import copy
+import hashlib
 import pickle
 import io
 import random
@@ -16,7 +18,7 @@ import torch
 from src.client.CandidacyCriterion import CandidacyCriterion
 from src.client.ExpansionCriterion import ExpansionCriterion
 from src.model.Models import FCLModel
-from src.model.blocks.Adapter import Adapter, promote_to_incorporated
+from src.model.blocks.Adapter import Adapter, adapter_topology, promote_to_incorporated
 from src.model.layers.WDStats import WDStats
 from src.model.layers.PrototypeMemory import PrototypeMemory
 from src.utils.ablation import AblationFlags, resolve_ablation_flags
@@ -45,6 +47,9 @@ _PROMOTED_CHECKPOINT_KEY = "promoted_local_checkpoint"
 _VOTE_ADAPT_CHECKPOINT_KEY = "vote_adapt_checkpoint"
 _KD_TEACHER_SNAPSHOT_KEY = "kd_teacher_snapshot"
 _KD_TEACHER_MARKER_KEY = "kd_teacher_marker"  # class-count or block index
+_KD_TEACHER_INCORP_SIG_KEY = (
+    "kd_teacher_incorp_sig"  # topology of the teacher's incorporated adapters
+)
 
 
 def _seed_everything(base_seed: int, partition_id: int, current_round: int) -> None:
@@ -71,6 +76,24 @@ def _build_model(context: Context) -> FCLModel:
     )
 
 
+def _param_metrics(model: FCLModel, base_total: int) -> dict:
+    """Parameter counters reported to the server every round.
+
+    params_base               : architecture with NO expansion (fresh model from the config)
+    params_total              : current model (base + local expansions + incorporated adapters)
+    params_expansion_overhead : params_total - params_base
+    """
+    report = model.parameter_report()
+    return {
+        "params_total": report["total"],
+        "params_base": base_total,
+        "params_expansion_overhead": report["total"] - base_total,
+        "params_shared": report["shared"],
+        "params_adapter_local": report["adapter_local"],
+        "params_incorporated": report["incorporated_adapters"],
+    }
+
+
 def _resolve_proximal_mu(config: ConfigRecord, flags: AblationFlags) -> float:
     """FedProx weight for this round; 0.0 (no proximal term) under FedAvg.
 
@@ -79,7 +102,9 @@ def _resolve_proximal_mu(config: ConfigRecord, flags: AblationFlags) -> float:
     """
     if flags.fl_algorithm != "fedprox":
         return 0.0
-    return float(config["proximal-mu"]) if "proximal-mu" in config else flags.proximal_mu
+    return (
+        float(config["proximal-mu"]) if "proximal-mu" in config else flags.proximal_mu
+    )
 
 
 def _apply_incorporated_topology(model: FCLModel, config: ConfigRecord) -> None:
@@ -261,19 +286,24 @@ def _load_client_data(msg: Message, context: Context):
 
 def _current_num_classes_seen(context: Context, current_round: int) -> Optional[int]:
     scenario = str(context.run_config.get("training-scenario", "federated")).lower()
-    
+
     raw_classes_per_step = context.run_config.get("classes-per-step", None)
     if raw_classes_per_step is None:
         return None
-    
+
     classes_per_step = resolve_classes_per_step(scenario, int(raw_classes_per_step))
     if classes_per_step is None:
         return None
-    
+
     num_classes_total = int(context.run_config["num-classes-total"])
     schedule = build_class_schedule(num_classes_total, classes_per_step)
     rounds_per_step = int(context.run_config.get("rounds-per-step", 1))
     return len(classes_seen_until_round(current_round, rounds_per_step, schedule))
+
+
+def _incorporated_signature(model: FCLModel) -> str:
+    topologies = [adapter_topology(a) for a in model.incorporated_adapters]
+    return hashlib.sha1(repr(topologies).encode("utf-8")).hexdigest()
 
 
 def _snapshot_global_branch(context: Context, model: FCLModel) -> None:
@@ -287,6 +317,35 @@ def _snapshot_global_branch(context: Context, model: FCLModel) -> None:
         buffer,
     )
     context.state[_KD_TEACHER_SNAPSHOT_KEY] = ConfigRecord({"blob": buffer.getvalue()})
+    context.state[_KD_TEACHER_INCORP_SIG_KEY] = ConfigRecord(
+        {"sig": _incorporated_signature(model)}
+    )
+
+
+def _sync_kd_teacher_incorporated(context: Context, model: FCLModel) -> None:
+    if _KD_TEACHER_SNAPSHOT_KEY not in context.state:
+        return
+
+    signature = _incorporated_signature(model)
+    stored = (
+        context.state[_KD_TEACHER_INCORP_SIG_KEY]["sig"]
+        if _KD_TEACHER_INCORP_SIG_KEY in context.state
+        else None
+    )
+    if stored == signature:
+        return
+
+    blob = context.state[_KD_TEACHER_SNAPSHOT_KEY]["blob"]
+    bundle = torch.load(io.BytesIO(blob), map_location="cpu", weights_only=False)
+    bundle["incorporated_adapters"] = copy.deepcopy(model.incorporated_adapters).cpu()
+    buffer = io.BytesIO()
+    torch.save(bundle, buffer)
+    context.state[_KD_TEACHER_SNAPSHOT_KEY] = ConfigRecord({"blob": buffer.getvalue()})
+    context.state[_KD_TEACHER_INCORP_SIG_KEY] = ConfigRecord({"sig": signature})
+    print(
+        f"[kd teacher synced: now holds {len(model.incorporated_adapters)} "
+        "incorporated adapter(s)]"
+    )
 
 
 def _load_kd_teacher_embed_fn(context: Context, device: torch.device):
@@ -340,6 +399,7 @@ def _resolve_kd_teacher(
         if block_idx > last_block:
             _snapshot_global_branch(context, model)
             context.state[_KD_TEACHER_MARKER_KEY] = ConfigRecord({"n": block_idx})
+        _sync_kd_teacher_incorporated(context, model)
         return lambda_kd, _load_kd_teacher_embed_fn(context, device)
 
     last_num_classes = (
@@ -355,6 +415,7 @@ def _resolve_kd_teacher(
     if num_classes > last_num_classes:
         _snapshot_global_branch(context, model)
         context.state[_KD_TEACHER_MARKER_KEY] = ConfigRecord({"n": num_classes})
+    _sync_kd_teacher_incorporated(context, model)
     return lambda_kd, _load_kd_teacher_embed_fn(context, device)
 
 
@@ -369,6 +430,7 @@ def train(msg: Message, context: Context) -> Message:
     flags = resolve_ablation_flags(context.run_config)
 
     model = _build_model(context)
+    base_params_total = model.parameter_report()["total"]  # no expansion yet
     model.to(device)
     _apply_incorporated_topology(model, config)
     model.set_global_arrays(msg.content["arrays"].to_torch_state_dict())
@@ -397,6 +459,7 @@ def train(msg: Message, context: Context) -> Message:
                 "expansion_g": 0.0,
                 "alpha_mean": 0.0,
                 "contribution_ratio": 0.0,
+                **_param_metrics(model, base_params_total),
             }
         )
         config_reply = ConfigRecord({"proto_stats": pickle.dumps((None, None, []))})
@@ -441,12 +504,15 @@ def train(msg: Message, context: Context) -> Message:
             expansion_g = float(result["g"])
 
             if flags.enable_expansion:
+                params_local_before = model.parameter_report()["adapter_local"]
                 kind = criterion.step(
                     model.adapter_local, result["g"], g_reduced_below_threshold=False
                 )
                 if kind is not None:
+                    params_local_after = model.parameter_report()["adapter_local"]
                     print(
-                        f"[client {partition_id} expands in {kind} mode (g={result['g']:.4f})]"
+                        f"[client {partition_id} expands in {kind} mode (g={result['g']:.4f}) "
+                        f"| adapter_local params {params_local_before} -> {params_local_after}]"
                     )
                     expanded_width = int(kind == "width")
                     expanded_depth = int(kind == "depth")
@@ -529,6 +595,7 @@ def train(msg: Message, context: Context) -> Message:
             "contribution_ratio": (
                 contribution_ratio if contribution_ratio is not None else 0.0
             ),
+            **_param_metrics(model, base_params_total),
         }
     )
     config_reply = ConfigRecord(config_reply_data)
