@@ -18,6 +18,7 @@ class FedProxStrategy(FedProx):
         incorporation_degrade_tolerance: float = 0.02,
         incorporation_baseline_window: int = 3,
         enable_incorporation: bool = True,
+        incorporation_options: Optional[dict] = None,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -32,6 +33,7 @@ class FedProxStrategy(FedProx):
             degrade_tolerance=incorporation_degrade_tolerance,
             baseline_window=incorporation_baseline_window,
             enabled=enable_incorporation,
+            **(incorporation_options or {}),
         )
 
         self.client_eval_history: list[dict] = []

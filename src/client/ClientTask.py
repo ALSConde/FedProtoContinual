@@ -288,6 +288,92 @@ def vote_on_candidate(
     return vote, acc_before, acc_after
 
 
+@torch.no_grad()
+def per_sample_ce_by_config(
+    model: FCLModel,
+    loader: DataLoader,
+    device: torch.device,
+    candidate: Optional[Adapter],
+    configs: dict,
+) -> dict:
+    """Per-sample cross-entropy of the shared embedding (x_global + incorporated
+    deltas, no local branch) under several incorporated-adapter configurations,
+    all computed on the very same batches (so differences are paired).
+
+    configs: name -> (set of incorporated slots to drop, add_candidate)
+    Returns name -> 1-D CPU tensor with one CE value per validation sample.
+    """
+    model.to(device)
+    model.eval()
+    if candidate is not None:
+        candidate.to(device)
+        candidate.eval()
+    out = {name: [] for name in configs}
+    if model.classifier.num_classes == 0:
+        return {name: torch.empty(0) for name in configs}
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        x_global = model.adapter_global(model.feature_extractor(x))
+        deltas = [a.forward_delta(x_global) for a in model.incorporated_adapters]
+        cand = candidate.forward_delta(x_global) if candidate is not None else None
+        for name, (drop, add_candidate) in configs.items():
+            h = x_global
+            for i, d in enumerate(deltas):
+                if i not in drop:
+                    h = h + d
+            if add_candidate and cand is not None:
+                h = h + cand
+            logits = model.classifier(h)
+            out[name].append(F.cross_entropy(logits, y, reduction="none").cpu())
+    return {name: (torch.cat(v) if v else torch.empty(0)) for name, v in out.items()}
+
+
+def build_mofe_payload(
+    model: FCLModel,
+    loader: DataLoader,
+    device: torch.device,
+    partition_id: int,
+    kind: str,
+    candidate: Optional[Adapter] = None,
+) -> dict:
+    """Sufficient statistics for the server-side MoFe decisions with no raw data.
+    kind="vote": configurations 'plus' (current + candidate) and 'rep_j'
+                 (adapter j replaced by the candidate), against 'minus' (current).
+    kind="loo" : configurations 'drop_j' (adapter j removed), against 'minus'.
+    For every configuration the payload carries the sum and sum of squares of the
+    paired per-sample gain  d = CE(minus) - CE(config)  (positive = config better).
+    """
+    k = len(model.incorporated_adapters)
+    configs: dict = {"minus": (frozenset(), False)}
+    if kind == "vote":
+        configs["plus"] = (frozenset(), True)
+        for j in range(k):
+            configs[f"rep_{j}"] = (frozenset({j}), True)
+    elif kind == "loo":
+        for j in range(k):
+            configs[f"drop_{j}"] = (frozenset({j}), False)
+    else:
+        raise ValueError(f"Unknown MoFe payload kind '{kind}'.")
+
+    ce = per_sample_ce_by_config(model, loader, device, candidate, configs)
+    base = ce["minus"]
+    stats = {}
+    for name, values in ce.items():
+        d = base - values
+        stats[name] = {
+            "d_sum": float(d.sum()),
+            "d_sq": float((d * d).sum()),
+            "ce_mean": float(values.mean()) if values.numel() else 0.0,
+        }
+    return {
+        "kind": kind,
+        "partition_id": int(partition_id),
+        "k": k,
+        "n": int(base.numel()),
+        "stats": stats,
+    }
+
+
 def test_fn(
     model: FCLModel,
     valloader: DataLoader,

@@ -7,7 +7,7 @@ from src.model.Models import FCLModel
 from src.server.FedAvgStrategy import FedAvgStrategy
 from src.server.FedProxStrategy import FedProxStrategy
 from src.server.ServerEvaluation import ForgettingMonitor, evaluate_global_model
-from src.utils.ablation import resolve_ablation_flags
+from src.utils.ablation import as_bool, resolve_ablation_flags
 from src.utils.data.utd_mahd_dataset import (
     build_class_schedule,
     classes_seen_until_round,
@@ -157,6 +157,17 @@ def main(grid: Grid, context: Context) -> None:
             context.run_config.get("incorporation-baseline-window", 3)
         ),
         enable_incorporation=flags.enable_incorporation,
+        incorporation_options=dict(
+            vote_mode=str(context.run_config.get("vote-mode", "legacy")).strip().lower(),
+            vote_loss_margin=float(context.run_config.get("vote-loss-margin", 0.01)),
+            vote_z=float(context.run_config.get("vote-z", 1.0)),
+            prune_enabled=as_bool(
+                context.run_config.get("prune-enabled", True), "prune-enabled"
+            ),
+            prune_margin=float(context.run_config.get("prune-margin", 0.01)),
+            prune_patience=int(context.run_config.get("prune-patience", 5)),
+            loo_ema=float(context.run_config.get("loo-ema", 0.7)),
+        ),
     )
     if flags.fl_algorithm == "fedprox":
         strategy = FedProxStrategy(proximal_mu=flags.proximal_mu, **strategy_kwargs)

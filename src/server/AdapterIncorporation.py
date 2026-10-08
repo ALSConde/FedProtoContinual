@@ -5,6 +5,63 @@ import torch
 import io
 from src.model.blocks.Adapter import Adapter, adapter_topology
 
+_INC_PREFIX = "incorporated_adapter."
+
+
+def _drop_slot(sd: dict, slot: int) -> dict:
+    """Remove incorporated adapter `slot` from a flat state dict and shift the
+    indices of the following adapters down by one (keys keep their order)."""
+    out: dict = {}
+    for k, v in sd.items():
+        if not k.startswith(_INC_PREFIX):
+            out[k] = v
+            continue
+        idx_str, sub = k[len(_INC_PREFIX) :].split(".", 1)
+        idx = int(idx_str)
+        if idx == slot:
+            continue
+        if idx > slot:
+            idx -= 1
+        out[f"{_INC_PREFIX}{idx}.{sub}"] = v
+    return out
+
+
+def _summarize(payloads: list, name: str, margin: float) -> Optional[dict]:
+    """Pool the paired per-sample loss differences of configuration `name` against
+    the current model (positive = `name` has lower loss), across voting clients.
+
+    mean : sample-weighted mean loss gain
+    se   : standard error of that mean (paired, sample level; optimistic because
+           samples of one client are correlated)
+    fav  : fraction of clients whose own mean gain is > 0
+    viol : MoFe hinge, mean of max(0, margin - gain) -- penalizes configurations
+           where the candidate does not reduce the task loss by `margin`
+    """
+    n_tot, d_sum, d_sq, fav, n_cli, viol = 0, 0.0, 0.0, 0, 0, 0.0
+    for p in payloads:
+        st = p["stats"].get(name)
+        n = int(p["n"])
+        if st is None or n <= 0:
+            continue
+        n_tot += n
+        d_sum += st["d_sum"]
+        d_sq += st["d_sq"]
+        n_cli += 1
+        mean_k = st["d_sum"] / n
+        fav += int(mean_k > 0.0)
+        viol += n * max(0.0, margin - mean_k)
+    if n_tot == 0 or n_cli == 0:
+        return None
+    mean = d_sum / n_tot
+    var = max(d_sq / n_tot - mean * mean, 0.0)
+    return {
+        "mean": mean,
+        "se": (var / n_tot) ** 0.5,
+        "fav": fav / n_cli,
+        "n": n_tot,
+        "viol": viol / n_tot,
+    }
+
 
 class AdapterIncorporationState:
     def __init__(
@@ -15,6 +72,13 @@ class AdapterIncorporationState:
         degrade_tolerance: float = 0.02,
         enabled: bool = True,
         baseline_window: int = 3,
+        vote_mode: str = "legacy",
+        vote_loss_margin: float = 0.01,
+        vote_z: float = 1.0,
+        prune_enabled: bool = True,
+        prune_margin: float = 0.01,
+        prune_patience: int = 5,
+        loo_ema: float = 0.7,
     ) -> None:
         # degrade_tolerance is relative: the fraction of the pre-incorporation accuracy
         # that may be lost before reverting (0.05 -> revert if acc < 0.95 * baseline).
@@ -26,6 +90,34 @@ class AdapterIncorporationState:
         # Pre-incorporation baseline = mean of the last `baseline_window` client-eval
         # accuracies (including the vote round itself), to damp round-to-round noise.
         self.baseline_window = max(1, int(baseline_window))
+
+        if vote_mode not in ("legacy", "mofe"):
+            raise ValueError(
+                f"Unknown vote_mode '{vote_mode}' (use 'legacy' or 'mofe')."
+            )
+        self.vote_mode = vote_mode
+        # MoFe vote: the candidate must lower the clients' validation loss of the
+        # shared embedding by `vote_loss_margin` (loss units) and by `vote_z`
+        # standard errors, and a `quorum` fraction of voters must individually gain.
+        self.vote_loss_margin = float(vote_loss_margin)
+        self.vote_z = float(vote_z)
+        # Leave-one-out pruning: an adapter whose removal lowers the validation
+        # loss by more than `prune_margin` (EMA, `loo_ema`) for `prune_patience`
+        # consecutive evaluations is removed.
+        self.prune_enabled = bool(prune_enabled)
+        self.prune_margin = float(prune_margin)
+        self.prune_patience = max(1, int(prune_patience))
+        self.loo_ema = float(loo_ema)
+        self._loo_value: list[float] = []
+        self._loo_streak: list[int] = []
+        self._pending_replace: Optional[dict] = None
+        self._pending_prune: Optional[int] = None
+        self._deferred_restore: Optional[dict] = None
+        self.total_replaced: int = 0
+        self.total_pruned: int = 0
+        self._last_vote_delta: Optional[float] = None
+        self._last_vote_se: Optional[float] = None
+        self._last_vote_violation: Optional[float] = None
 
         self.topologies: list[dict] = []
 
@@ -70,11 +162,19 @@ class AdapterIncorporationState:
             snapshot["incorp_last_vote_favorable_fraction"] = (
                 self._last_vote_favorable_fraction
             )
+        if self.vote_mode == "mofe":
+            snapshot["incorp_replaced"] = self.total_replaced
+            snapshot["incorp_pruned"] = self.total_pruned
+            if self._last_vote_delta is not None:
+                snapshot["incorp_last_vote_loss_gain"] = self._last_vote_delta
+                snapshot["incorp_last_vote_loss_gain_se"] = self._last_vote_se
+                snapshot["incorp_last_vote_mofe_violation"] = self._last_vote_violation
         return snapshot
 
     def on_configure_train(
         self, arrays: ArrayRecord, config: ConfigRecord
     ) -> ArrayRecord:
+        arrays = self._apply_deferred_changes(arrays)
         config["incorporated_topologies"] = pickle.dumps(self.topologies)
         config["candidacy_locked"] = (
             self.pending_candidate is not None or self._reversion_watch is not None
@@ -148,7 +248,10 @@ class AdapterIncorporationState:
             # before tallying so that an acceptance freezes the window including it.
             if acc is not None:
                 self._record_acc(acc)
-            self._tally_votes(replies)
+            if self.vote_mode == "mofe":
+                self._tally_mofe(replies)
+            else:
+                self._tally_votes(replies)
             return
 
         if acc is not None:
@@ -156,6 +259,9 @@ class AdapterIncorporationState:
                 self._check_reversion(acc)
             else:
                 self._record_acc(acc)
+
+        if self.vote_mode == "mofe":
+            self._update_loo(replies)
 
     def _reject_candidate(self, candidate: dict) -> None:
         self.total_rejected += 1
@@ -201,9 +307,11 @@ class AdapterIncorporationState:
 
     def _accept_candidate(self, candidate: dict) -> None:
         if len(self.topologies) >= self.a_max:
-            # TODO: implement something like MoFe, to compare the new candidate
-            # against the others incorporated topologies, and replace the worst one
-            # if the new candidate is better.
+            if self.vote_mode == "mofe":
+                raise RuntimeError(
+                    "_accept_candidate called with a full incorporated set in "
+                    "vote_mode='mofe'; replacement must go through _stage_replacement."
+                )
             self._reject_candidate(candidate)
             return
 
@@ -285,10 +393,197 @@ class AdapterIncorporationState:
         if checkpoint is None:
             return
         self.total_reverted += 1
-        self.topologies = checkpoint["topologies"]
-        self._pending_full_arrays_override = checkpoint["arrays_sd"]
+        if checkpoint.get("kind") == "replace":
+            # Indices shift on replacement, so the restore must wait for the next
+            # configure_train: this round's evaluate_fn still pairs the current
+            # topologies with this round's (current-indexing) arrays.
+            self._deferred_restore = checkpoint
+        else:
+            self.topologies = checkpoint["topologies"]
+            self._pending_full_arrays_override = checkpoint["arrays_sd"]
         self._broadcast_signal = "reverted"
         self._post_vote_signal = {
             "partition_id": checkpoint["accepted_partition_id"],
             "status": "reverted",
         }
+
+    # ------------------------- MoFe vote -----------------------------------------
+    @staticmethod
+    def _parse_payloads(replies: list) -> list:
+        payloads = []
+        for reply in replies:
+            if not reply.has_content():
+                continue
+            cfg = reply.content.get("config")
+            if cfg is None or "mofe_stats" not in cfg:
+                continue
+            payloads.append(pickle.loads(cfg["mofe_stats"]))
+        return payloads
+
+    def _passes(self, summary: Optional[dict]) -> bool:
+        if summary is None:
+            return False
+        return (
+            summary["mean"] > self.vote_loss_margin
+            and summary["mean"] >= self.vote_z * summary["se"]
+            and summary["fav"] >= self.quorum
+        )
+
+    def _tally_mofe(self, replies: list) -> None:
+        candidate = self.pending_candidate
+        self.pending_candidate = None
+        if candidate is None:
+            return
+
+        payloads = [
+            p
+            for p in self._parse_payloads(replies)
+            if p.get("kind") == "vote"
+            and int(p["partition_id"]) != candidate["partition_id"]
+            and int(p.get("k", -1)) == len(self.topologies)
+        ]
+        full = len(self.topologies) >= self.a_max
+
+        if not full:
+            summary = _summarize(payloads, "plus", self.vote_loss_margin)
+            slot = None
+        else:
+            summary, slot = None, None
+            for j in range(len(self.topologies)):
+                cand = _summarize(payloads, f"rep_{j}", self.vote_loss_margin)
+                if cand is not None and (
+                    summary is None or cand["mean"] > summary["mean"]
+                ):
+                    summary, slot = cand, j
+
+        if summary is None:
+            self._last_vote_favorable_fraction = None
+            self._last_vote_delta = self._last_vote_se = None
+            self._last_vote_violation = None
+            self._reject_candidate(candidate)
+            return
+
+        self._last_vote_favorable_fraction = summary["fav"]
+        self._last_vote_delta = summary["mean"]
+        self._last_vote_se = summary["se"]
+        self._last_vote_violation = summary["viol"]
+
+        if not self._passes(summary):
+            self._reject_candidate(candidate)
+        elif slot is None:
+            self._accept_candidate(candidate)
+        else:
+            self._stage_replacement(candidate, slot)
+
+    def _stage_replacement(self, candidate: dict, slot: int) -> None:
+        adapter: Adapter = torch.load(
+            io.BytesIO(candidate["adapter_bytes"]),
+            map_location="cpu",
+            weights_only=False,
+        )
+        self._pending_replace = {
+            "slot": slot,
+            "adapter": adapter,
+            "partition_id": candidate["partition_id"],
+        }
+        self.total_accepted += 1
+        self._reversion_watch = {
+            "rounds_elapsed": 0,
+            "baseline_acc": self._baseline(),
+        }
+        self._post_vote_signal = {
+            "partition_id": candidate["partition_id"],
+            "status": "accepted",
+        }
+
+    # ----------------------- leave-one-out pruning --------------------------------
+    def _reset_loo(self) -> None:
+        self._loo_value = []
+        self._loo_streak = []
+
+    def _update_loo(self, replies: list) -> None:
+        k = len(self.topologies)
+        if k == 0:
+            self._reset_loo()
+            return
+        if not self.prune_enabled:
+            return
+        payloads = [
+            p
+            for p in self._parse_payloads(replies)
+            if p.get("kind") == "loo" and int(p.get("k", -1)) == k
+        ]
+        if not payloads:
+            return
+        if len(self._loo_value) != k:
+            self._loo_value = (self._loo_value + [0.0] * k)[:k]
+            self._loo_streak = (self._loo_streak + [0] * k)[:k]
+        for j in range(k):
+            summary = _summarize(payloads, f"drop_{j}", self.prune_margin)
+            if summary is None:
+                continue
+            # positive = validation loss gets lower without adapter j (j is harmful)
+            self._loo_value[j] = (
+                self.loo_ema * self._loo_value[j]
+                + (1.0 - self.loo_ema) * summary["mean"]
+            )
+            if self._loo_value[j] > self.prune_margin:
+                self._loo_streak[j] += 1
+            else:
+                self._loo_streak[j] = 0
+
+        busy = (
+            self.pending_candidate is not None
+            or self._reversion_watch is not None
+            or self._pending_full_arrays_override is not None
+            or self._pending_replace is not None
+            or self._pending_prune is not None
+            or self._deferred_restore is not None
+        )
+        if busy:
+            return
+        due = [j for j in range(k) if self._loo_streak[j] >= self.prune_patience]
+        if due:
+            self._pending_prune = max(due, key=lambda j: self._loo_value[j])
+
+    # ----------------- deferred (index-shifting) changes --------------------------
+    def _apply_deferred_changes(self, arrays: ArrayRecord) -> ArrayRecord:
+        if self._deferred_restore is not None:
+            checkpoint = self._deferred_restore
+            self._deferred_restore = None
+            self.topologies = list(checkpoint["topologies"])
+            self._reset_loo()
+            return ArrayRecord(checkpoint["arrays_sd"])
+
+        if self._pending_replace is not None:
+            pending = self._pending_replace
+            self._pending_replace = None
+            sd = {k: v.clone() for k, v in arrays.to_torch_state_dict().items()}
+            self._checkpoint_before_incorp = {
+                "topologies": list(self.topologies),
+                "arrays_sd": {k: v.clone() for k, v in sd.items()},
+                "accepted_partition_id": pending["partition_id"],
+                "kind": "replace",
+            }
+            new_sd = _drop_slot(sd, pending["slot"])
+            self.topologies.pop(pending["slot"])
+            self.topologies.append(adapter_topology(pending["adapter"]))
+            idx = len(self.topologies) - 1
+            for k, v in pending["adapter"].state_dict().items():
+                new_sd[f"{_INC_PREFIX}{idx}.{k}"] = v.clone()
+            self.total_replaced += 1
+            self._reset_loo()
+            return ArrayRecord(new_sd)
+
+        if self._pending_prune is not None:
+            slot = self._pending_prune
+            self._pending_prune = None
+            if slot < len(self.topologies):
+                sd = arrays.to_torch_state_dict()
+                new_sd = _drop_slot(dict(sd), slot)
+                self.topologies.pop(slot)
+                self.total_pruned += 1
+                self._reset_loo()
+                print(f"[incorporation pruned: adapter slot {slot} removed (LOO)]")
+                return ArrayRecord(new_sd)
+        return arrays

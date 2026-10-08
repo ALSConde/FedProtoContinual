@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "FedProtoContinual"
-version = "0.0.4"
+version = "0.0.5"
 description = "Federated Learning With Prototype and Continual Learning"
 license = "Apache-2.0"
 dependencies = [
@@ -50,7 +50,7 @@ stride = 30
 dirichlet-alpha = 0.1
 # --- Expansion config ---
 theta-exp=0.04
-a-max = 10
+a-max = 3
 # theta-alpha = 0.30
 theta-alpha = 0.15
 candidacy-patience = 3
@@ -59,6 +59,14 @@ candidacy-quorum = 0.5
 vote-adapt-steps = 20
 vote-margin = 0.001
 vote-adapt-lr = 0.001
+# --- MoFe vote / leave-one-out pruning (vote-mode = "legacy" keeps the old protocol) ---
+vote-mode = "mofe"
+vote-loss-margin = 0.01
+vote-z = 1.0
+prune-enabled = true
+prune-margin = 0.01
+prune-patience = 5
+loo-ema = 0.7
 incorporation-monitor-rounds = 3
 incorporation-degrade-tolerance = 0.05
 incorporation-baseline-window = 3

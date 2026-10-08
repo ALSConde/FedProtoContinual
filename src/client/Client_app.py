@@ -28,6 +28,7 @@ from .ClientTask import (
     test_fn,
     compute_expansion_signal,
     vote_on_candidate,
+    build_mofe_payload,
 )
 from ..utils.data.utd_mahd_dataset import (
     build_class_schedule,
@@ -227,6 +228,17 @@ def _apply_incorporation_outcome(
         _restore_local_checkpoint(context, model, _VOTE_ADAPT_CHECKPOINT_KEY, device)
     if config.get("last_incorporation_confirmed", False):
         _clear_checkpoint(context, _VOTE_ADAPT_CHECKPOINT_KEY)
+
+
+def _vote_mode(context: Context) -> str:
+    return str(context.run_config.get("vote-mode", "legacy")).strip().lower()
+
+
+def _reply_with_payload(msg: Message, metrics_reply: MetricRecord, payload) -> Message:
+    content = {"metrics": metrics_reply}
+    if payload is not None:
+        content["config"] = ConfigRecord({"mofe_stats": pickle.dumps(payload)})
+    return Message(content=RecordDict(content), reply_to=msg)
 
 
 def _load_global_prototypes(
@@ -659,6 +671,27 @@ def _handle_vote_round(
     )
     candidate.to(device)
 
+    if _vote_mode(context) == "mofe":
+        # MoFe vote: paired comparison of the validation loss of the shared
+        # embedding with vs. without the candidate (and with the candidate in place
+        # of each incorporated adapter). Nothing is trained or adapted here, so the
+        # two arms differ only by the candidate.
+        payload = build_mofe_payload(
+            model, valloader, device, own_partition_id, "vote", candidate=candidate
+        )
+        gain = payload["stats"]["plus"]["d_sum"]
+        metrics_reply = MetricRecord(
+            {
+                **eval_metrics,
+                "vote": float(gain > 0.0),
+                "acc_before": 0.0,
+                "acc_after": 0.0,
+                "partition_id": own_partition_id,
+                "num-examples": num_examples,
+            }
+        )
+        return _reply_with_payload(msg, metrics_reply, payload)
+
     _stash_local_checkpoint(context, model, _VOTE_ADAPT_CHECKPOINT_KEY)
     vote, acc_before, acc_after = vote_on_candidate(
         model,
@@ -746,5 +779,11 @@ def evaluate(msg: Message, context: Context) -> Message:
             "num-examples": len(valloader.dataset),
         }
     )
-    content = RecordDict({"metrics": metrics_reply})
-    return Message(content=content, reply_to=msg)
+    payload = None
+    if (
+        _vote_mode(context) == "mofe"
+        and flags.enable_incorporation
+        and len(model.incorporated_adapters) > 0
+    ):
+        payload = build_mofe_payload(model, valloader, device, partition_id, "loo")
+    return _reply_with_payload(msg, metrics_reply, payload)
