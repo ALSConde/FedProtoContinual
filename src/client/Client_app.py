@@ -112,6 +112,8 @@ def _apply_incorporated_topology(model: FCLModel, config: ConfigRecord) -> None:
     if "incorporated_topologies" in config:
         topologies = pickle.loads(config["incorporated_topologies"])
         model.load_incorporated_topology(topologies)
+    if "shadow_topology" in config:
+        model.load_shadow_topology(pickle.loads(config["shadow_topology"]))
 
 
 def _reset_wd_stats(module: torch.nn.Module) -> None:
@@ -560,6 +562,8 @@ def train(msg: Message, context: Context) -> Message:
         kd_temperature=float(context.run_config.get("kd-temperature", 2.0)),
         frozen_embed_fn=frozen_embed_fn,
         proximal_mu=_resolve_proximal_mu(config, flags),
+        lambda_mofe=float(context.run_config.get("lambda-mofe", 0.5)),
+        mofe_margin=float(context.run_config.get("mofe-train-margin", 0.0)),
     )
 
     sum_h, counts, class_ids = memory.get_stats()
@@ -780,10 +784,18 @@ def evaluate(msg: Message, context: Context) -> Message:
         }
     )
     payload = None
-    if (
-        _vote_mode(context) == "mofe"
-        and flags.enable_incorporation
-        and len(model.incorporated_adapters) > 0
-    ):
-        payload = build_mofe_payload(model, valloader, device, partition_id, "loo")
+    if _vote_mode(context) == "mofe" and flags.enable_incorporation:
+        if len(model.shadow_adapters) > 0:
+            # Candidate on probation: the vote statistics are computed with the
+            # co-trained shadow adapter (with vs. without), every evaluation round.
+            payload = build_mofe_payload(
+                model,
+                valloader,
+                device,
+                partition_id,
+                "vote",
+                candidate=model.shadow_adapters[0],
+            )
+        elif len(model.incorporated_adapters) > 0:
+            payload = build_mofe_payload(model, valloader, device, partition_id, "loo")
     return _reply_with_payload(msg, metrics_reply, payload)

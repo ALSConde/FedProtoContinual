@@ -158,7 +158,9 @@ def main(grid: Grid, context: Context) -> None:
         ),
         enable_incorporation=flags.enable_incorporation,
         incorporation_options=dict(
-            vote_mode=str(context.run_config.get("vote-mode", "legacy")).strip().lower(),
+            vote_mode=str(context.run_config.get("vote-mode", "legacy"))
+            .strip()
+            .lower(),
             vote_loss_margin=float(context.run_config.get("vote-loss-margin", 0.01)),
             vote_z=float(context.run_config.get("vote-z", 1.0)),
             prune_enabled=as_bool(
@@ -167,6 +169,8 @@ def main(grid: Grid, context: Context) -> None:
             prune_margin=float(context.run_config.get("prune-margin", 0.01)),
             prune_patience=int(context.run_config.get("prune-patience", 5)),
             loo_ema=float(context.run_config.get("loo-ema", 0.7)),
+            shadow_rounds=int(context.run_config.get("shadow-rounds", 0)),
+            shadow_window=int(context.run_config.get("shadow-window", 3)),
         ),
     )
     if flags.fl_algorithm == "fedprox":
@@ -218,6 +222,10 @@ def main(grid: Grid, context: Context) -> None:
             )
 
             eval_sd = eval_arrays.to_torch_state_dict()
+            # A candidate on probation is not part of the deployed model.
+            eval_sd = {
+                k: v for k, v in eval_sd.items() if not k.startswith("shadow_adapter.")
+            }
             n_topologies = len(strategy.incorporation.topologies)
 
             stale_prefixes = tuple(

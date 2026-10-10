@@ -90,6 +90,8 @@ def train_fn(
     kd_temperature: float = 2.0,
     frozen_embed_fn: Optional[Callable] = None,
     proximal_mu: float = 0.0,
+    lambda_mofe: float = 0.5,
+    mofe_margin: float = 0.0,
 ) -> float:
     if kd_mode not in ("kl", "embedding_mse"):
         raise ValueError(
@@ -116,12 +118,24 @@ def train_fn(
         prox_ref = [p.detach().clone() for p in prox_params]
 
     optmizer = torch.optim.Adam(model.parameters(), lr=lr)
-    running_loss, n_batches = 0.0, 0  # running_loss becomes a device tensor (no per-step sync)
+    running_loss, n_batches = (
+        0.0,
+        0,
+    )  # running_loss becomes a device tensor (no per-step sync)
     memory.expand(model.classifier.num_classes)
 
     for _ in range(epochs):
-        for x, y in _device_batches(trainloader, device, max_classes=memory.num_classes):
-            h, h_shared = model.embed_both(x)
+        for x, y in _device_batches(
+            trainloader, device, max_classes=memory.num_classes
+        ):
+            has_shadow = len(model.shadow_adapters) > 0
+            if has_shadow:
+                # Candidate on probation: both views of the same batch. Prototypes are
+                # accumulated from the deployed (shadow-free) shared embedding.
+                h, h_shared, h_with = model.embed_pair(x)
+            else:
+                h, h_shared = model.embed_both(x)
+                h_with = None
             memory.update(h_shared, y, check_bounds=False)
 
             if model.classifier.num_classes == 0:
@@ -130,13 +144,33 @@ def train_fn(
             optmizer.zero_grad()
 
             logits = model.classifier(h)
-            loss = F.cross_entropy(logits, y)
+            ce = F.cross_entropy(logits, y)
 
             l_proto = prototype_alignment_loss(
                 h, y, model.classifier.prototypes, known_consolidated
             )
-            if l_proto is not None:
-                loss += lambda_proto * l_proto
+            if has_shadow:
+                # Both views train (nothing is frozen). Dropout-like pairing keeps the
+                # model good without the candidate, so the later with/without
+                # comparison is not biased by co-adaptation. The MoFe hinge only
+                # pushes the 'with' side (the 'without' loss is detached).
+                ce_with = F.cross_entropy(model.classifier(h_with), y)
+                loss = 0.5 * (ce + ce_with)
+                if lambda_mofe > 0.0:
+                    loss = loss + lambda_mofe * F.relu(
+                        ce_with - ce.detach() + mofe_margin
+                    )
+                l_proto_with = prototype_alignment_loss(
+                    h_with, y, model.classifier.prototypes, known_consolidated
+                )
+                if l_proto is not None and l_proto_with is not None:
+                    loss = loss + lambda_proto * 0.5 * (l_proto + l_proto_with)
+                elif l_proto is not None:
+                    loss = loss + lambda_proto * l_proto
+            else:
+                loss = ce
+                if l_proto is not None:
+                    loss += lambda_proto * l_proto
 
             if use_kd:
                 h_global = embed_global(x)

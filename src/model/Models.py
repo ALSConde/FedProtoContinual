@@ -1,6 +1,6 @@
 import copy
 import math
-from typing import Callable
+from typing import Callable, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -191,16 +191,25 @@ class FCLModel(nn.Module):
         )
 
         self.incorporated_adapters = nn.ModuleList()
+        # Candidate adapter under probation (0 or 1 module). It is trained by every
+        # client but is NOT part of the deployed embedding (embed/embed_both skip it
+        # unless with_shadow=True), so evaluation, prototypes and the KD teacher
+        # keep describing the model without it.
+        self.shadow_adapters = nn.ModuleList()
 
     def incorporated_delta(self, x_global: torch.Tensor) -> torch.Tensor:
         if len(self.incorporated_adapters) == 0:
             return torch.zeros_like(x_global)
         return sum(a.forward_delta(x_global) for a in self.incorporated_adapters)
 
-    def embed_both(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def embed_both(
+        self, x: torch.Tensor, with_shadow: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         feats = self.feature_extractor(x)
         x_global = self.adapter_global(feats)
         incorporated = self.incorporated_delta(x_global)
+        if with_shadow and len(self.shadow_adapters) > 0:
+            incorporated = incorporated + self.shadow_adapters[0].forward_delta(x_global)
         x_shared = x_global + incorporated
         if not self.use_local_adapter:
             # Ablation: no personalization branch, local == shared embedding.
@@ -212,6 +221,25 @@ class FCLModel(nn.Module):
     def embed(self, x: torch.Tensor) -> torch.Tensor:
         x_local, _ = self.embed_both(x)
         return x_local
+
+    def embed_pair(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Both views of the same batch while a shadow adapter is on probation.
+
+        Returns (h_without, h_shared_without, h_with): local embedding and shared
+        embedding of the deployed model, and local embedding with the shadow added.
+        The backbone, adapter_global and adapter_local are computed once."""
+        feats = self.feature_extractor(x)
+        x_global = self.adapter_global(feats)
+        incorporated = self.incorporated_delta(x_global)
+        shadow = self.shadow_adapters[0].forward_delta(x_global)
+        x_shared = x_global + incorporated
+        if not self.use_local_adapter:
+            return x_shared, x_shared, x_shared + shadow
+        delta_local = self.adapter_local.forward_delta(x_global)
+        local_base = self.alpha_gate(x_global, delta_local)
+        return local_base + incorporated, x_shared, local_base + incorporated + shadow
 
     def local_contribution_ratio(self, x: torch.Tensor) -> torch.Tensor:
         if not self.use_local_adapter:
@@ -281,6 +309,7 @@ class FCLModel(nn.Module):
             self.feature_extractor,
             self.adapter_global,
             self.incorporated_adapters,
+            self.shadow_adapters,
         ):
             params.extend(module.parameters())
         return params
@@ -331,6 +360,17 @@ class FCLModel(nn.Module):
             build_adapter_from_topology(topo, device=device) for topo in topologies
         )
 
+    def load_shadow_topology(self, topology: Optional[dict]) -> None:
+        """Build (or clear, topology=None) the shadow adapter under probation."""
+        if topology is None:
+            self.shadow_adapters = nn.ModuleList()
+            return
+        device = next(self.parameters(), None)
+        device = device.device if device is not None else None
+        self.shadow_adapters = nn.ModuleList(
+            [build_adapter_from_topology(topology, device=device)]
+        )
+
     def get_global_arrays(self) -> dict:
         sd = {}
         for k, v in self.feature_extractor.state_dict().items():
@@ -340,6 +380,8 @@ class FCLModel(nn.Module):
         for i, adapter in enumerate(self.incorporated_adapters):
             for k, v in adapter.state_dict().items():
                 sd[f"incorporated_adapter.{i}.{k}"] = v
+        for k, v in self.shadow_adapters.state_dict().items():
+            sd[f"shadow_adapter.{k}"] = v
         return sd
 
     def set_global_arrays(self, state_dict: dict) -> None:
@@ -360,6 +402,22 @@ class FCLModel(nn.Module):
         }
         self.feature_extractor.load_state_dict(fe_sd)
         self.adapter_global.load_state_dict(ag_sd)
+
+        shadow_prefix = "shadow_adapter."
+        shadow_sd = {
+            k[len(shadow_prefix) :]: v
+            for k, v in state_dict.items()
+            if k.startswith(shadow_prefix)
+        }
+        if bool(shadow_sd) != (len(self.shadow_adapters) > 0):
+            raise RuntimeError(
+                "Shadow adapter mismatch: the state dict "
+                f"{'has' if shadow_sd else 'has no'} shadow weights but the model "
+                f"{'has' if len(self.shadow_adapters) else 'has no'} shadow adapter. "
+                "Call load_shadow_topology() before set_global_arrays()."
+            )
+        if shadow_sd:
+            self.shadow_adapters.load_state_dict(shadow_sd)
 
         grouped: dict[int, dict] = {}
         for k, v in state_dict.items():
