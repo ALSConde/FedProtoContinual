@@ -292,6 +292,9 @@ def _load_client_data(msg: Message, context: Context):
             held_out_subjects=held_out_subjects,
             partition_mode=str(context.run_config.get("partition-mode", "subject")),
             val_split=str(context.run_config.get("val-split", "recording")),
+            class_retention=str(context.run_config.get("class-retention", "dirichlet"))
+            .strip()
+            .lower(),
             seed=int(context.run_config.get("seed", 0)),
         ),
         partition_id,

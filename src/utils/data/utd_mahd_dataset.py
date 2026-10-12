@@ -28,6 +28,15 @@ PARTITION_POOLED = "pooled"
 PARTITION_SUBJECT_UNION = "subject-union"
 VALID_PARTITION_MODES = (PARTITION_SUBJECT, PARTITION_POOLED, PARTITION_SUBJECT_UNION)
 
+# Class-imbalance injected on top of the per-subject partition (subject modes only).
+#   dirichlet  Dirichlet-driven class retention (see _apply_class_retention): clients keep
+#              different class mixes and a fixed ~25% volume budget (legacy behaviour).
+#   none       Dirichlet OFF: every client keeps all classes and all windows of its own
+#              subject, so client divergence comes only from the subject itself.
+CLASS_RETENTION_DIRICHLET = "dirichlet"
+CLASS_RETENTION_NONE = "none"
+VALID_CLASS_RETENTION = (CLASS_RETENTION_DIRICHLET, CLASS_RETENTION_NONE)
+
 # How a client's windows are split into train / validation.
 #   window     random window-level split (legacy). With stride < window_size neighbouring
 #              windows of the SAME recording overlap, so validation leaks into training.
@@ -429,7 +438,14 @@ def load_data(
     held_out_subjects: Optional[list[int]] = None,
     partition_mode: str = PARTITION_SUBJECT,
     val_split: str = VAL_SPLIT_WINDOW,
+    class_retention: str = CLASS_RETENTION_DIRICHLET,
 ):
+
+    if class_retention not in VALID_CLASS_RETENTION:
+        raise ValueError(
+            f"Unknown class-retention '{class_retention}'. "
+            f"Expected one of {VALID_CLASS_RETENTION}."
+        )
 
     if val_split not in VALID_VAL_SPLITS:
         raise ValueError(
@@ -446,6 +462,13 @@ def load_data(
         raise ValueError(
             f"Unknown partition-mode '{partition_mode}'. "
             f"Expected one of {VALID_PARTITION_MODES}."
+        )
+
+    if class_retention == CLASS_RETENTION_NONE and partition_mode == PARTITION_POOLED:
+        raise ValueError(
+            "class-retention='none' only applies to the subject partition modes: in "
+            "partition-mode='pooled' the Dirichlet split is the partitioner. Use "
+            "partition-mode='subject' (or 'subject-union')."
         )
 
     dataset = _get_cached_dataset(root, window_size, stride)
@@ -494,7 +517,7 @@ def load_data(
                 if dirichlet_mode == DIRICHLET_DYNAMIC
                 else seed + pid
             )
-            if len(idx) > 0:
+            if len(idx) > 0 and class_retention == CLASS_RETENTION_DIRICHLET:
                 idx = _apply_class_retention(
                     idx, dataset.labels, total_classes, dirichlet_alpha, seed_p
                 )
