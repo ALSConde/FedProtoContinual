@@ -380,6 +380,16 @@ def _collect(out_root: Path) -> dict[str, dict[int, dict[str, Any]]]:
         except (json.JSONDecodeError, OSError, ValueError):
             continue
         metrics = dict(payload.get("last_eval_metrics") or {})
+        # avg_inc_acc is derived from forgetting_per_class.csv (Class-IL only); it is not
+        # stored in last_eval_metrics, so compute it here to make it reportable.
+        try:
+            inc = _load_grid_search()._avg_incremental_accuracy(
+                summary.parent, payload.get("run_config") or {}
+            )
+        except Exception:
+            inc = None
+        if inc is not None:
+            metrics["avg_inc_acc"] = inc
         data.setdefault(summary.parent.parent.name, {})[seed] = metrics
     return data
 
