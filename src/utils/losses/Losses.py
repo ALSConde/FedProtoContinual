@@ -98,8 +98,8 @@ def distillation_loss_kl(
     sim_local = (h_local_n @ p_n.t()) / temperature
     sim_global = (h_global_n @ p_n.t()) / temperature
 
-    log_q_local = F.log_softmax(sim_local, dim=1)  # Student
-    q_global = F.softmax(sim_global, dim=1)  # Teacher
+    log_q_local = F.log_softmax(sim_local.detach(), dim=1)  # Student
+    q_global = F.softmax(sim_global.detach(), dim=1)  # Teacher
 
     kl_loss = F.kl_div(log_q_local, q_global, reduction="batchmean")
     return kl_loss * (temperature**2)
