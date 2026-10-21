@@ -23,6 +23,7 @@ from src.model.layers.WDStats import WDStats
 from src.model.layers.PrototypeMemory import PrototypeMemory
 from src.utils.ablation import AblationFlags, resolve_ablation_flags
 from .ClientTask import (
+    collect_prototype_stats,
     compute_local_contribution_ratio,
     train_fn,
     test_fn,
@@ -492,9 +493,11 @@ def train(msg: Message, context: Context) -> Message:
         return Message(content=content, reply_to=msg)
 
     new_class_ids = set()
+    local_class_ids = set()
     for _, c in train_loader:
         for unique_class in c.unique():
             cid = int(unique_class.item())
+            local_class_ids.add(cid)
             if cid not in known_consolidated:
                 new_class_ids.add(cid)
 
@@ -567,7 +570,14 @@ def train(msg: Message, context: Context) -> Message:
         proximal_mu=_resolve_proximal_mu(config, flags),
         lambda_mofe=float(context.run_config.get("lambda-mofe", 0.5)),
         mofe_margin=float(context.run_config.get("mofe-train-margin", 0.0)),
+        local_class_ids=sorted(local_class_ids) if flags.ce_local_classes else None,
+        proto_prepass=flags.proto_prepass,
     )
+
+    if flags.proto_postpass:
+        # Statistics of the trained model (eval mode) replace the ones accumulated while
+        # the weights were still changing; same format, so the server is unaffected.
+        collect_prototype_stats(model, train_loader, memory, device)
 
     sum_h, counts, class_ids = memory.get_stats()
     memory.reset()
@@ -700,6 +710,11 @@ def _handle_vote_round(
         return _reply_with_payload(msg, metrics_reply, payload)
 
     _stash_local_checkpoint(context, model, _VOTE_ADAPT_CHECKPOINT_KEY)
+    vote_ce_class_ids = None
+    if flags.ce_local_classes:
+        vote_ce_class_ids = sorted(
+            {int(c) for _, ys in train_loader for c in ys.unique().tolist()}
+        )
     vote, acc_before, acc_after = vote_on_candidate(
         model,
         candidate,
@@ -713,6 +728,7 @@ def _handle_vote_round(
         ),
         adapt_steps=int(context.run_config.get("vote-adapt-steps", 10)),
         vote_margin=float(context.run_config.get("vote-margin", 0.03)),
+        ce_class_ids=vote_ce_class_ids,
     )
 
     if vote == 1.0:

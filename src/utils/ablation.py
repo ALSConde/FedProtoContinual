@@ -10,6 +10,12 @@ experiment ladder can be launched by changing flags only:
     enable-kd              global-knowledge distillation term (L_kd)
     fl-algorithm           "fedavg" | "fedprox" (server aggregation + client prox term)
     proximal-mu            FedProx proximal weight (only used when fl-algorithm=fedprox)
+    ce-local-classes       cross-entropy restricted to the classes present in the client's
+                           local data (inference still scores every seen prototype)
+    proto-prepass          before local training, build provisional prototypes (local only)
+                           for classes that have no server prototype yet
+    proto-postpass         after local training, recompute the prototype statistics sent
+                           to the server with the trained model in eval mode
 
 Dependencies are validated explicitly (RuntimeError-style, never a silent
 fallback): expansion and incorporation both act on the local adapter, so they
@@ -46,6 +52,9 @@ class AblationFlags:
     enable_kd: bool
     fl_algorithm: str
     proximal_mu: float  # effective value: 0.0 unless fl_algorithm == "fedprox"
+    ce_local_classes: bool = False
+    proto_prepass: bool = False
+    proto_postpass: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -59,6 +68,13 @@ class AblationFlags:
             f"expansion={'on' if self.enable_expansion else 'off'}",
             f"incorporation={'on' if self.enable_incorporation else 'off'}",
         ]
+        # Only listed when enabled, so the default ladder output stays unchanged.
+        if self.ce_local_classes:
+            parts.append("ce-local-classes=on")
+        if self.proto_prepass:
+            parts.append("proto-prepass=on")
+        if self.proto_postpass:
+            parts.append("proto-postpass=on")
         return " | ".join(parts)
 
 
@@ -104,4 +120,11 @@ def resolve_ablation_flags(run_config: Mapping[str, Any]) -> AblationFlags:
         enable_kd=kd,
         fl_algorithm=algorithm,
         proximal_mu=mu,
+        ce_local_classes=as_bool(
+            run_config.get("ce-local-classes", False), "ce-local-classes"
+        ),
+        proto_prepass=as_bool(run_config.get("proto-prepass", False), "proto-prepass"),
+        proto_postpass=as_bool(
+            run_config.get("proto-postpass", False), "proto-postpass"
+        ),
     )

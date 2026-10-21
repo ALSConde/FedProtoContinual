@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Sequence, Union
 import torch
 from torch.utils.data import TensorDataset, random_split, DataLoader
 import torch.nn.functional as F
@@ -39,6 +39,116 @@ def _device_batches(
         out.append((X[i : i + n], Y[i : i + n]))
         i += n
     return out
+
+
+def _build_ce_index(
+    local_class_ids: Optional[Sequence[int]], num_classes: int, device: torch.device
+) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
+    """Index tensors that restrict the cross-entropy to the classes present in the
+    client's local data (flag ce-local-classes).
+
+    Returns (ids, remap): `ids` are the kept logit columns, `remap` maps a global class
+    id to its position among them (-1 for classes that are not kept). None means the CE
+    is computed over every class, as before. Inference is unaffected: the classifier
+    still scores every seen prototype, since no task identity exists at test time.
+    """
+    if local_class_ids is None:
+        return None
+    ids = sorted({int(c) for c in local_class_ids})
+    if not ids:
+        return None
+    if ids[-1] >= num_classes:
+        raise ValueError(
+            f"local class id {ids[-1]} >= classifier size {num_classes}: expand the "
+            "classifier before building the CE class index"
+        )
+    ids_t = torch.tensor(ids, dtype=torch.long, device=device)
+    remap = torch.full((num_classes,), -1, dtype=torch.long, device=device)
+    remap[ids_t] = torch.arange(len(ids), dtype=torch.long, device=device)
+    return ids_t, remap
+
+
+def _class_ce(
+    logits: torch.Tensor,
+    y: torch.Tensor,
+    ce_index: Optional[tuple[torch.Tensor, torch.Tensor]],
+) -> torch.Tensor:
+    if ce_index is None:
+        return F.cross_entropy(logits, y)
+    ids, remap = ce_index
+    return F.cross_entropy(logits.index_select(1, ids), remap[y])
+
+
+@torch.no_grad()
+def provisional_prototypes(
+    model: FCLModel,
+    loader: DataLoader,
+    device: torch.device,
+    known_consolidated: set,
+) -> list[int]:
+    """Pre-training pass (flag proto-prepass).
+
+    Classes that have no server prototype yet (first round of a class) sit at zero in the
+    classifier, so their logits are constant and the CE gives no usable signal. This
+    pass embeds the local data with the model received for the round (eval mode, no
+    gradient) and writes the per-class mean of the shared embedding, the same quantity
+    the server aggregates, into the LOCAL classifier only. Nothing is sent to the
+    server, the classes are not added to `known_consolidated` (so L_proto still treats
+    them as new), and the values are overwritten when the server's prototypes arrive.
+    Returns the class ids that received a provisional prototype.
+    """
+    model.to(device)
+    num_classes = model.classifier.num_classes
+    if num_classes == 0:
+        return []
+    was_training = model.training
+    model.eval()
+    try:
+        sums = torch.zeros(num_classes, model.classifier.embedding_dim, device=device)
+        counts = torch.zeros(num_classes, device=device)
+        for x, y in _device_batches(loader, device, max_classes=num_classes):
+            _, h_shared = model.embed_both(x)
+            sums.index_add_(0, y, h_shared.to(sums.dtype))
+            counts.index_add_(0, y, torch.ones(len(y), device=device))
+        ids = [
+            c
+            for c in torch.nonzero(counts > 0).flatten().tolist()
+            if c not in known_consolidated
+        ]
+        if ids:
+            idx = torch.tensor(ids, dtype=torch.long, device=device)
+            protos = model.classifier.prototypes
+            protos[idx] = (sums[idx] / counts[idx].unsqueeze(1)).to(protos.dtype)
+        return ids
+    finally:
+        model.train(was_training)
+
+
+@torch.no_grad()
+def collect_prototype_stats(
+    model: FCLModel,
+    loader: DataLoader,
+    memory: PrototypeMemory,
+    device: torch.device,
+) -> None:
+    """Post-training pass (flag proto-postpass).
+
+    Replaces the statistics accumulated during training (a mix of embeddings from a model
+    that kept changing, in train mode) with statistics of the trained model in eval mode,
+    which is the model the client actually returns. The sums stay un-normalised and the
+    counts exact, so the server-side aggregation is unchanged.
+    """
+    model.to(device)
+    was_training = model.training
+    model.eval()
+    try:
+        memory.expand(model.classifier.num_classes)
+        memory.reset()
+        for x, y in _device_batches(loader, device, max_classes=memory.num_classes):
+            _, h_shared = model.embed_both(x)
+            memory.update(h_shared, y, check_bounds=False)
+    finally:
+        model.train(was_training)
 
 
 # Function to load data -- With sintetic data for testing purposes
@@ -92,7 +202,12 @@ def train_fn(
     proximal_mu: float = 0.0,
     lambda_mofe: float = 0.5,
     mofe_margin: float = 0.0,
+    local_class_ids: Optional[Sequence[int]] = None,
+    proto_prepass: bool = False,
 ) -> float:
+    """`local_class_ids`: when given, the CE is restricted to those classes (flag
+    ce-local-classes). `proto_prepass`: build provisional local prototypes for classes
+    without a server prototype before the first step (flag proto-prepass)."""
     if kd_mode not in ("kl", "embedding_mse"):
         raise ValueError(
             f"Invalid kd_mode: {kd_mode}. Must be 'kl' or 'embedding_mse'."
@@ -123,6 +238,9 @@ def train_fn(
         0,
     )  # running_loss becomes a device tensor (no per-step sync)
     memory.expand(model.classifier.num_classes)
+    ce_index = _build_ce_index(local_class_ids, model.classifier.num_classes, device)
+    if proto_prepass:
+        provisional_prototypes(model, trainloader, device, known_consolidated)
 
     for _ in range(epochs):
         for x, y in _device_batches(
@@ -144,7 +262,7 @@ def train_fn(
             optmizer.zero_grad()
 
             logits = model.classifier(h)
-            ce = F.cross_entropy(logits, y)
+            ce = _class_ce(logits, y, ce_index)
 
             l_proto = prototype_alignment_loss(
                 h, y, model.classifier.prototypes, known_consolidated
@@ -154,7 +272,7 @@ def train_fn(
                 # model good without the candidate, so the later with/without
                 # comparison is not biased by co-adaptation. The MoFe hinge only
                 # pushes the 'with' side (the 'without' loss is detached).
-                ce_with = F.cross_entropy(model.classifier(h_with), y)
+                ce_with = _class_ce(model.classifier(h_with), y, ce_index)
                 loss = 0.5 * (ce + ce_with)
                 if lambda_mofe > 0.0:
                     loss = loss + lambda_mofe * F.relu(
@@ -250,6 +368,7 @@ def short_local_adaptation(
     lr: float,
     device: torch.device,
     max_steps: int,
+    ce_class_ids: Optional[Sequence[int]] = None,
 ):
     """Adapt adapter_local, alpha_gate and the candidate (a private copy of it, which
     is discarded after the vote) for exactly `max_steps` optimizer steps (mini-batches).
@@ -279,6 +398,7 @@ def short_local_adaptation(
         p.requires_grad_(True)
 
     optimizer = torch.optim.Adam(trainable_params, lr=lr)
+    ce_index = _build_ce_index(ce_class_ids, model.classifier.num_classes, device)
     steps_done = 0
     try:
         if model.classifier.num_classes != 0 and len(adapt_loader) > 0:
@@ -290,7 +410,7 @@ def short_local_adaptation(
                     optimizer.zero_grad()
                     h, _ = embed_with_extra_incorporated(model, x, candidate)
                     logits = model.classifier(h)
-                    loss = F.cross_entropy(logits, y)
+                    loss = _class_ce(logits, y, ce_index)
                     loss.backward()
                     optimizer.step()
                     steps_done += 1
@@ -311,10 +431,17 @@ def vote_on_candidate(
     lr: float,
     adapt_steps: int,
     vote_margin: float,
+    ce_class_ids: Optional[Sequence[int]] = None,
 ) -> tuple[float, float, float]:
     _, acc_before = evaluate_with_candidate(model, None, val_loader, device)
     short_local_adaptation(
-        model, candidate, train_loader, lr=lr, device=device, max_steps=adapt_steps
+        model,
+        candidate,
+        train_loader,
+        lr=lr,
+        device=device,
+        max_steps=adapt_steps,
+        ce_class_ids=ce_class_ids,
     )
     _, acc_after = evaluate_with_candidate(model, candidate, val_loader, device)
 
