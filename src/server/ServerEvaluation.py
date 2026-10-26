@@ -1,7 +1,8 @@
 import csv
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
+import numpy as np
 import torch
 import torch.nn.functional as F
 from src.model.Models import FCLModel
@@ -151,6 +152,103 @@ class ForgettingMonitor:
         return payload
 
 
+class PredictionFlowMonitor:
+    """Where do the test samples of old classes go?
+
+    For every evaluation it splits the global model's predictions into
+      old samples (true class from an earlier step) -> correct / predicted as a class of
+      the CURRENT step (recency bias) / predicted as another old class (the old classes
+      got confused among themselves, i.e. the representation degraded);
+      current-step samples -> correct / predicted as an old class / other current class;
+    plus the share of all predictions that land on current-step classes versus the share
+    of samples that truly belong to them. Written to prediction_flow.csv; the full
+    confusion matrices of the first and last round of each step go to
+    confusion_matrices.npz (key round_<r>, rows = true, columns = predicted).
+    """
+
+    _FIELDNAMES = [
+        "round", "step", "n_old", "old_correct", "old_to_current", "old_to_other_old",
+        "n_cur", "cur_correct", "cur_to_old", "cur_to_other_cur",
+        "pred_share_current", "true_share_current",
+    ]
+
+    def __init__(self, output_dir: str) -> None:
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.csv_path = self.output_dir / "prediction_flow.csv"
+        self.npz_path = self.output_dir / "confusion_matrices.npz"
+        self._header_written = (
+            self.csv_path.exists() and self.csv_path.stat().st_size > 0
+        )
+        self._matrices: dict[str, np.ndarray] = {}
+
+    @staticmethod
+    def summarize(
+        confusion: torch.Tensor, current_classes: Iterable[int], seen_classes: Iterable[int]
+    ) -> dict:
+        size = confusion.shape[0]
+        cur = sorted(c for c in set(current_classes) if c < size)
+        old = sorted(c for c in set(seen_classes) - set(current_classes) if c < size)
+        conf = confusion.long()
+        total = int(conf.sum())
+
+        def _block(rows, cols):
+            if not rows or not cols:
+                return 0
+            return int(conf[rows][:, cols].sum())
+
+        n_old = int(conf[old].sum()) if old else 0
+        old_correct = int(sum(conf[c, c] for c in old))
+        old_to_cur = _block(old, cur)
+        n_cur = int(conf[cur].sum()) if cur else 0
+        cur_correct = int(sum(conf[c, c] for c in cur))
+        cur_to_old = _block(cur, old)
+        return {
+            "n_old": n_old,
+            "old_correct": old_correct,
+            "old_to_current": old_to_cur,
+            "old_to_other_old": n_old - old_correct - old_to_cur,
+            "n_cur": n_cur,
+            "cur_correct": cur_correct,
+            "cur_to_old": cur_to_old,
+            "cur_to_other_cur": n_cur - cur_correct - cur_to_old,
+            "pred_share_current": (_block(list(range(size)), cur) / total) if total else None,
+            "true_share_current": (n_cur / total) if total else None,
+        }
+
+    def update(
+        self,
+        current_round: int,
+        confusion: torch.Tensor,
+        current_classes: Iterable[int],
+        seen_classes: Iterable[int],
+        step: int,
+        save_matrix: bool = False,
+    ) -> dict:
+        row = self.summarize(confusion, current_classes, seen_classes)
+        with self.csv_path.open("a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=self._FIELDNAMES)
+            if not self._header_written:
+                writer.writeheader()
+                self._header_written = True
+            writer.writerow({"round": current_round, "step": step, **row})
+        if save_matrix:
+            self._matrices[f"round_{current_round}"] = confusion.numpy()
+            np.savez_compressed(self.npz_path, **self._matrices)
+
+        def _frac(num, den):
+            return (row[num] / row[den]) if row[den] else None
+
+        metrics = {
+            "flow_old_correct": _frac("old_correct", "n_old"),
+            "flow_old_to_current": _frac("old_to_current", "n_old"),
+            "flow_old_to_other_old": _frac("old_to_other_old", "n_old"),
+            "flow_cur_to_old": _frac("cur_to_old", "n_cur"),
+            "flow_pred_share_current": row["pred_share_current"],
+        }
+        return {k: v for k, v in metrics.items() if v is not None}
+
+
 @torch.no_grad()
 def _global_embed(model: FCLModel, x: torch.Tensor) -> torch.Tensor:
     feats = model.feature_extractor(x)
@@ -171,13 +269,20 @@ def evaluate_global_model(
     device: torch.device,
     allowed_classes: Optional[set] = None,
     chunk_size: int = 512,
-) -> tuple[float, float, dict[int, float], dict[int, int]]:
+    return_confusion: bool = False,
+):
     """Same results as the previous per-batch version, with no per-class Python loop and
-    a single host sync at the end (it used ~50 syncs per batch)."""
+    a single host sync at the end (it used ~50 syncs per batch).
+
+    Returns (loss, acc, per_class_acc, per_class_n). With return_confusion=True a fifth
+    element is appended: a CPU LongTensor [C, C] of counts (row = true class, column =
+    predicted class, C = number of classes of the classifier), built from the same
+    predictions, so its diagonal reproduces per_class_acc exactly."""
     model.eval()
     num_classes = model.classifier.num_classes
+    empty = (0.0, 0.0, {}, {}, None) if return_confusion else (0.0, 0.0, {}, {})
     if num_classes == 0:
-        return 0.0, 0.0, {}, {}
+        return empty
 
     xs, ys = [], []
     for x, y in test_loader:  # CPU tensors: filtering here costs no GPU sync
@@ -189,7 +294,7 @@ def evaluate_global_model(
         xs.append(x)
         ys.append(y)
     if not xs:
-        return 0.0, 0.0, {}, {}
+        return empty
     X, Y = torch.cat(xs).to(device), torch.cat(ys).to(device)
 
     loss_sum = torch.zeros((), device=device)
@@ -197,6 +302,7 @@ def evaluate_global_model(
     n_correct = torch.zeros((), device=device)
     class_total = torch.zeros(num_classes, device=device)
     class_correct = torch.zeros(num_classes, device=device)
+    confusion = torch.zeros(num_classes * num_classes, device=device)
 
     for i in range(0, X.shape[0], chunk_size):
         x, y = X[i : i + chunk_size], Y[i : i + chunk_size]
@@ -205,7 +311,9 @@ def evaluate_global_model(
         y_safe = y.clamp(max=num_classes - 1)
         logits = model.classifier(h)
         ce = F.cross_entropy(logits, y_safe, reduction="none")
-        hit = (logits.argmax(dim=1) == y_safe).to(h.dtype) * valid
+        pred = logits.argmax(dim=1)
+        hit = (pred == y_safe).to(h.dtype) * valid
+        confusion.index_add_(0, y_safe * num_classes + pred, valid)
         loss_sum = loss_sum + (ce * valid).sum()
         n_total = n_total + valid.sum()
         n_correct = n_correct + hit.sum()
@@ -214,9 +322,13 @@ def evaluate_global_model(
 
     total_n = int(n_total.item())
     if total_n == 0:
-        return 0.0, 0.0, {}, {}
+        return empty
     ct, cc = class_total.cpu(), class_correct.cpu()
     seen = ct.nonzero(as_tuple=True)[0].tolist()
     per_class_acc = {c: float(cc[c]) / float(ct[c]) for c in seen}
     per_class_n = {c: int(ct[c]) for c in seen}
-    return float(loss_sum) / total_n, float(n_correct) / total_n, per_class_acc, per_class_n
+    result = (float(loss_sum) / total_n, float(n_correct) / total_n, per_class_acc, per_class_n)
+    if return_confusion:
+        conf = confusion.view(num_classes, num_classes).round().long().cpu()
+        return (*result, conf)
+    return result

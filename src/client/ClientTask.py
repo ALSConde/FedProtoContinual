@@ -246,13 +246,40 @@ def _kd_term(
     known_sorted: list,
     kd_mode: str,
     kd_temperature: float,
+    kd_scale_mode: str = "const",
+    kd_logit_scale: float = 1.0,
 ) -> Optional[torch.Tensor]:
+    """One KD term. For kd_mode="kl" the logit scale of the similarity distributions is
+    set by kd_scale_mode:
+      const   teacher and student both use kd_logit_scale (default; with 1.0 this is the
+              previous behaviour, with ~20 the distributions match the classifier's);
+      local   both use the classifier's own learned scale, detached (strength then varies
+              per client and over the rounds, because the scale is local and trained);
+      hybrid  teacher: kd_logit_scale, student: local scale (kept for comparison only: it
+              adds a sharpness-matching term whenever the local scale drifts away from
+              kd_logit_scale).
+    """
     if kd_mode == "embedding_mse":
         return distillation_loss(h, h_teacher)
     reference = (
         model.classifier.prototypes[known_sorted] if len(known_sorted) >= 2 else None
     )
-    return distillation_loss_kl(h, h_teacher, reference, temperature=kd_temperature)
+    if kd_scale_mode == "const":
+        s_student = s_teacher = kd_logit_scale
+    elif kd_scale_mode == "local":
+        s_student = s_teacher = model.classifier.scale.detach()
+    elif kd_scale_mode == "hybrid":
+        s_student, s_teacher = model.classifier.scale.detach(), kd_logit_scale
+    else:
+        raise ValueError(f"Unknown kd_scale_mode '{kd_scale_mode}'.")
+    return distillation_loss_kl(
+        h,
+        h_teacher,
+        reference,
+        temperature=kd_temperature,
+        scale_student=s_student,
+        scale_teacher=s_teacher,
+    )
 
 
 def _split_train_step(
@@ -278,6 +305,8 @@ def _split_train_step(
     prox_ref: list,
     lambda_mofe: float,
     mofe_margin: float,
+    kd_scale_mode: str = "const",
+    kd_logit_scale: float = 1.0,
 ) -> Optional[torch.Tensor]:
     """One optimisation step with two disjoint objectives.
 
@@ -335,13 +364,27 @@ def _split_train_step(
         h_teacher = embed_global(x)
         if lambda_kd_shared > 0.0:
             kd_g = _kd_term(
-                model, h_g, h_teacher, known_sorted, kd_mode, kd_temperature
+                model,
+                h_g,
+                h_teacher,
+                known_sorted,
+                kd_mode,
+                kd_temperature,
+                kd_scale_mode,
+                kd_logit_scale,
             )
             if kd_g is not None:
                 loss_g = loss_g + lambda_kd_shared * kd_g
         if lambda_kd_local > 0.0:
             kd_l = _kd_term(
-                model, h_l, h_teacher, known_sorted, kd_mode, kd_temperature
+                model,
+                h_l,
+                h_teacher,
+                known_sorted,
+                kd_mode,
+                kd_temperature,
+                kd_scale_mode,
+                kd_logit_scale,
             )
             if kd_l is not None:
                 loss_l = loss_l + lambda_kd_local * kd_l
@@ -415,6 +458,8 @@ def train_fn(
     lambda_proto_shared: Optional[float] = None,
     lambda_proto_local: Optional[float] = None,
     lambda_kd_shared: float = 0.0,
+    kd_scale_mode: str = "const",
+    kd_logit_scale: float = 1.0,
 ) -> float:
     """`local_class_ids`: when given, the CE is restricted to those classes (flag
     ce-local-classes). `proto_prepass`: build provisional local prototypes for classes
@@ -424,7 +469,9 @@ def train_fn(
     `split_optimizers`: two optimizers/objectives (see _split_train_step); it needs the
     local adapter and is otherwise ignored. In that mode `lambda_kd` is the weight of the
     KD term on the LOCAL embedding and `lambda_kd_shared` the one on the SHARED embedding;
-    `lambda_proto_shared/local` default to `lambda_proto`."""
+    `lambda_proto_shared/local` default to `lambda_proto`.
+    `kd_scale_mode` / `kd_logit_scale`: logit scale of the KL distillation (see _kd_term).
+    """
     if kd_mode not in ("kl", "embedding_mse"):
         raise ValueError(
             f"Invalid kd_mode: {kd_mode}. Must be 'kl' or 'embedding_mse'."
@@ -489,6 +536,8 @@ def train_fn(
                     prox_ref=prox_ref,
                     lambda_mofe=lambda_mofe,
                     mofe_margin=mofe_margin,
+                    kd_scale_mode=kd_scale_mode,
+                    kd_logit_scale=kd_logit_scale,
                 )
                 if step_loss is not None:
                     running_loss = running_loss + step_loss
@@ -541,17 +590,16 @@ def train_fn(
 
             if use_kd:
                 h_global = embed_global(x)
-                if kd_mode == "embedding_mse":
-                    l_kd = distillation_loss(h, h_global)
-                else:
-                    reference_prototypes = (
-                        model.classifier.prototypes[known_sorted]
-                        if len(known_sorted) >= 2
-                        else None
-                    )
-                    l_kd = distillation_loss_kl(
-                        h, h_global, reference_prototypes, temperature=kd_temperature
-                    )
+                l_kd = _kd_term(
+                    model,
+                    h,
+                    h_global,
+                    known_sorted,
+                    kd_mode,
+                    kd_temperature,
+                    kd_scale_mode,
+                    kd_logit_scale,
+                )
                 if l_kd is not None:
                     loss += lambda_kd * l_kd
 

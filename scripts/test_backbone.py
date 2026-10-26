@@ -55,7 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.client.ClientTask import train_fn  # noqa: E402
+from src.client.ClientTask import collect_prototype_stats, train_fn  # noqa: E402
 from src.model.Models import FCLModel  # noqa: E402
 from src.model.Models import FeatureExtractor as RepoFeatureExtractor  # noqa: E402
 from src.model.layers.PrototypeMemory import PrototypeMemory  # noqa: E402
@@ -535,6 +535,13 @@ def run_class_il(spec: str, args, data, device) -> dict:
             memory = PrototypeMemory(
                 args.hidden_dim, max(model.classifier.num_classes, 1), device
             )
+            # Same KD placement logic as Client_app (split optimizers only).
+            lk_local, lk_shared = lambda_kd, 0.0
+            if args.split_optimizers and teacher is not None:
+                if args.kd_on in ("shared", "both"):
+                    lk_shared = args.lambda_kd_shared
+                if args.kd_on == "shared":
+                    lk_local = 0.0
             loss = train_fn(
                 model,
                 loader,
@@ -544,11 +551,24 @@ def run_class_il(spec: str, args, data, device) -> dict:
                 device=device,
                 known_consolidated=known,
                 lambda_proto=args.lambda_proto,
-                lambda_kd=lambda_kd,
+                lambda_kd=lk_local,
                 kd_mode=args.kd_mode,
                 kd_temperature=args.kd_temperature,
                 frozen_embed_fn=teacher,
+                local_class_ids=classes if args.ce_local_classes else None,
+                proto_prepass=args.proto_prepass,
+                lr_scales={
+                    "extractor": args.lr_scale_extractor,
+                    "adapter_global": args.lr_scale_adapter_global,
+                    "local": args.lr_scale_local,
+                },
+                split_optimizers=args.split_optimizers,
+                lambda_kd_shared=lk_shared,
+                kd_scale_mode=args.kd_scale_mode,
+                kd_logit_scale=args.kd_logit_scale,
             )
+            if args.proto_postpass:
+                collect_prototype_stats(model, loader, memory, device)
             sum_h, counts, ids = memory.get_stats()
             memory.reset()
             aggregator.aggregate([(sum_h, counts, ids)])
@@ -842,6 +862,20 @@ def parse_args():
     p.add_argument("--kd-mode", choices=["kl", "embedding_mse"], default="kl")
     p.add_argument("--kd-temperature", type=float, default=2.0)
     p.add_argument("--tau", type=float, default=15.0)
+    # project flags (see scripts/test_proto_passes.py); defaults = previous behaviour
+    p.add_argument("--ce-local-classes", action="store_true")
+    p.add_argument("--proto-prepass", action="store_true")
+    p.add_argument("--proto-postpass", action="store_true")
+    p.add_argument("--split-optimizers", action="store_true")
+    p.add_argument("--kd-on", choices=["local", "shared", "both"], default="local")
+    p.add_argument("--lambda-kd-shared", type=float, default=1.0)
+    p.add_argument("--lr-scale-extractor", type=float, default=1.0)
+    p.add_argument("--lr-scale-adapter-global", type=float, default=1.0)
+    p.add_argument("--lr-scale-local", type=float, default=1.0)
+    p.add_argument(
+        "--kd-scale-mode", choices=["const", "local", "hybrid"], default="const"
+    )
+    p.add_argument("--kd-logit-scale", type=float, default=1.0)
     # general
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="auto")

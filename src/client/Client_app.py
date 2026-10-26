@@ -490,6 +490,7 @@ def train(msg: Message, context: Context) -> Message:
                 "expansion_g": 0.0,
                 "alpha_mean": 0.0,
                 "contribution_ratio": 0.0,
+                "classifier_scale": float(model.classifier.scale.detach()),
                 **_param_metrics(model, base_params_total),
             }
         )
@@ -607,6 +608,8 @@ def train(msg: Message, context: Context) -> Message:
         lambda_proto_shared=_inherit(context, "lambda-proto-shared", "lambda-proto", 1.0),
         lambda_proto_local=_inherit(context, "lambda-proto-local", "lambda-proto", 1.0),
         lambda_kd_shared=lambda_kd_shared,
+        kd_scale_mode=flags.kd_scale_mode,
+        kd_logit_scale=float(context.run_config.get("kd-logit-scale", 1.0)),
     )
 
     if flags.proto_postpass:
@@ -656,6 +659,8 @@ def train(msg: Message, context: Context) -> Message:
             "expanded_depth": expanded_depth,
             "expansion_g": expansion_g,
             "alpha_mean": alpha_mean,
+            # local, learned per client (never aggregated): logged to see how far it drifts from 20
+            "classifier_scale": float(model.classifier.scale.detach()),
             "contribution_ratio": (
                 contribution_ratio if contribution_ratio is not None else 0.0
             ),

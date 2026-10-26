@@ -25,6 +25,11 @@ experiment ladder can be launched by changing flags only:
                            shared embedding detached at the local branch input
     kd-on                  where KD acts under split-optimizers: local | shared | both
                            (ignored without split-optimizers: KD is then on the fused h)
+    kd-scale-mode          logit scale of the KL distillation (kd-mode=kl): const (teacher
+                           and student use kd-logit-scale) | local (both use the detached
+                           learned classifier scale) | hybrid (teacher kd-logit-scale,
+                           student local scale). kd-logit-scale=1.0 is the previous behaviour;
+                           ~20 matches the classifier's nominal scale.
 
 Learning-rate multipliers (always available, default 1.0; applied on top of the round lr):
 lr-scale-extractor, lr-scale-adapter-global (global + incorporated + shadow adapters) and
@@ -42,6 +47,7 @@ from typing import Any, Mapping
 
 VALID_FL_ALGORITHMS = ("fedavg", "fedprox")
 VALID_KD_ON = ("local", "shared", "both")
+VALID_KD_SCALE_MODES = ("const", "local", "hybrid")
 
 _TRUE = {"true", "1", "yes", "on"}
 _FALSE = {"false", "0", "no", "off"}
@@ -73,6 +79,7 @@ class AblationFlags:
     proto_postpass: bool = False
     split_optimizers: bool = False
     kd_on: str = "local"
+    kd_scale_mode: str = "const"
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -93,6 +100,8 @@ class AblationFlags:
             parts.append("proto-prepass=on")
         if self.proto_postpass:
             parts.append("proto-postpass=on")
+        if self.kd_scale_mode != "const":
+            parts.append(f"kd-scale-mode={self.kd_scale_mode}")
         if self.split_optimizers:
             note = "" if self.use_local_adapter else ",inactive:no-local-adapter"
             parts.append(f"split-optimizers=on(kd-on={self.kd_on}{note})")
@@ -128,6 +137,12 @@ def resolve_ablation_flags(run_config: Mapping[str, Any]) -> AblationFlags:
     if kd_on not in VALID_KD_ON:
         raise ValueError(f"Unknown kd-on '{kd_on}'. Expected one of {VALID_KD_ON}.")
 
+    kd_scale_mode = str(run_config.get("kd-scale-mode", "const")).strip().lower()
+    if kd_scale_mode not in VALID_KD_SCALE_MODES:
+        raise ValueError(
+            f"Unknown kd-scale-mode '{kd_scale_mode}'. Expected one of {VALID_KD_SCALE_MODES}."
+        )
+
     mu = float(run_config.get("proximal-mu", 0.0))
     if algorithm == "fedprox":
         if mu <= 0.0:
@@ -156,4 +171,5 @@ def resolve_ablation_flags(run_config: Mapping[str, Any]) -> AblationFlags:
             run_config.get("split-optimizers", False), "split-optimizers"
         ),
         kd_on=kd_on,
+        kd_scale_mode=kd_scale_mode,
     )

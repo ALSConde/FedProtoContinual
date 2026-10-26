@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, Union
 import torch.nn.functional as F
 import torch
 
@@ -87,19 +87,36 @@ def distillation_loss_kl(
     h_global: torch.Tensor,
     reference_prototypes: Optional[torch.Tensor],
     temperature: float = 2.0,
+    scale_student: Union[float, torch.Tensor] = 1.0,
+    scale_teacher: Optional[Union[float, torch.Tensor]] = None,
 ) -> Optional[torch.Tensor]:
+    """KL between the teacher and student similarity distributions over the reference
+    prototypes, scaled by T^2.
+
+    logits = scale * cos(h, prototype) / T. With scale=1 (the previous behaviour) the
+    cosine range [-1, 1] makes both distributions almost uniform and the term is ~100x
+    smaller than the classification loss; pass the classifier's logit scale (e.g. 20) so
+    the distributions match the sharpness the classifier actually uses.
+
+    scale_teacher=None uses the student's scale for the teacher too, which is what you
+    want: the teacher and the student go through the SAME classifier head, so a scale
+    mismatch would only add a sharpness-matching term that has nothing to do with
+    forgetting. Scales are treated as constants (pass detached values).
+    """
     if reference_prototypes is None or reference_prototypes.shape[0] < 2:
         return None
+    if scale_teacher is None:
+        scale_teacher = scale_student
 
     p_n = F.normalize(reference_prototypes, dim=1)
     h_local_n = F.normalize(h_local, dim=1)
     h_global_n = F.normalize(h_global, dim=1)
 
-    sim_local = (h_local_n @ p_n.t()) / temperature
-    sim_global = (h_global_n @ p_n.t()) / temperature
+    sim_local = (h_local_n @ p_n.t()) * (scale_student / temperature)
+    sim_global = (h_global_n @ p_n.t()) * (scale_teacher / temperature)
 
-    log_q_local = F.log_softmax(sim_local.detach(), dim=1)  # Student
-    q_global = F.softmax(sim_global.detach(), dim=1)  # Teacher
+    log_q_local = F.log_softmax(sim_local, dim=1)  # Student
+    q_global = F.softmax(sim_global, dim=1)  # Teacher
 
     kl_loss = F.kl_div(log_q_local, q_global, reduction="batchmean")
     return kl_loss * (temperature**2)

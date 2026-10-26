@@ -6,11 +6,17 @@ import torch
 from src.model.Models import FCLModel
 from src.server.FedAvgStrategy import FedAvgStrategy
 from src.server.FedProxStrategy import FedProxStrategy
-from src.server.ServerEvaluation import ForgettingMonitor, evaluate_global_model
+from src.server.ServerEvaluation import (
+    ForgettingMonitor,
+    PredictionFlowMonitor,
+    evaluate_global_model,
+)
 from src.utils.ablation import as_bool, resolve_ablation_flags
 from src.utils.data.utd_mahd_dataset import (
     build_class_schedule,
+    classes_in_current_step,
     classes_seen_until_round,
+    current_step_index,
     load_server_test_set,
     parse_int_list_config,
     resolve_classes_per_step,
@@ -184,6 +190,7 @@ def main(grid: Grid, context: Context) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     output_dir = str(context.run_config.get("output-dir", "outputs/default_run"))
     forgetting_monitor = ForgettingMonitor(output_dir=output_dir)
+    flow_monitor = PredictionFlowMonitor(output_dir=output_dir)
     last_eval_metrics: dict = {}
     server_eval_history: list[dict] = []
     evaluate_fn = None
@@ -256,9 +263,15 @@ def main(grid: Grid, context: Context) -> None:
                     max(current_round, 1), rounds_per_step_for_eval, schedule
                 )
 
-            loss, acc, per_class_acc, per_class_n = evaluate_global_model(
-                eval_model, server_test_loader, device, allowed_classes
+            eval_out = evaluate_global_model(
+                eval_model,
+                server_test_loader,
+                device,
+                allowed_classes,
+                return_confusion=schedule is not None,
             )
+            loss, acc, per_class_acc, per_class_n = eval_out[:4]
+            confusion = eval_out[4] if schedule is not None else None
 
             metrics = {"server_eval_loss": loss, "server_eval_acc": acc}
             # Global (shared) model size, base vs. current: grows only through
@@ -291,6 +304,21 @@ def main(grid: Grid, context: Context) -> None:
                     metrics["worst_class_bwt"] = report["worst_class_bwt"]
                     metrics["worst_class_bwt_id"] = report["worst_class_bwt_id"]
                 metrics["num_classes_seen"] = int(len(allowed_classes))
+                if confusion is not None:
+                    rps = rounds_per_step_for_eval
+                    in_step = (max(current_round, 1) - 1) % rps
+                    metrics.update(
+                        flow_monitor.update(
+                            current_round,
+                            confusion,
+                            classes_in_current_step(
+                                max(current_round, 1), rps, schedule
+                            ),
+                            allowed_classes,
+                            step=current_step_index(max(current_round, 1), rps, schedule),
+                            save_matrix=in_step in (0, rps - 1),
+                        )
+                    )
 
             metrics.update(strategy.incorporation.metrics_snapshot())
             last_eval_metrics.clear()
