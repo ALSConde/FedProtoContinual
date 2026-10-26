@@ -16,6 +16,21 @@ experiment ladder can be launched by changing flags only:
                            for classes that have no server prototype yet
     proto-postpass         after local training, recompute the prototype statistics sent
                            to the server with the trained model in eval mode
+    split-optimizers       two optimizers/objectives: shared params (extractor, global and
+                           incorporated adapters) on L_g = CE + lambda-proto-shared*L_proto
+                           (+ prox, + KD if kd-on has "shared") evaluated on the shared
+                           embedding; local params (local adapter, alpha gate, classifier
+                           scale) on L_l = CE + lambda-proto-local*L_proto (+ KD if kd-on
+                           has "local") evaluated on the personalised embedding, with the
+                           shared embedding detached at the local branch input
+    kd-on                  where KD acts under split-optimizers: local | shared | both
+                           (ignored without split-optimizers: KD is then on the fused h)
+
+Learning-rate multipliers (always available, default 1.0; applied on top of the round lr):
+lr-scale-extractor, lr-scale-adapter-global (global + incorporated + shadow adapters) and
+lr-scale-local (local adapter + alpha gate + classifier scale). Model init knobs:
+near-identity-eps-local (local adapter weight std, default 1e-3) and alpha-init (alpha-gate
+logit, default 0.0 -> alpha 0.25).
 
 Dependencies are validated explicitly (RuntimeError-style, never a silent
 fallback): expansion and incorporation both act on the local adapter, so they
@@ -26,6 +41,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 VALID_FL_ALGORITHMS = ("fedavg", "fedprox")
+VALID_KD_ON = ("local", "shared", "both")
 
 _TRUE = {"true", "1", "yes", "on"}
 _FALSE = {"false", "0", "no", "off"}
@@ -55,6 +71,8 @@ class AblationFlags:
     ce_local_classes: bool = False
     proto_prepass: bool = False
     proto_postpass: bool = False
+    split_optimizers: bool = False
+    kd_on: str = "local"
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -75,6 +93,9 @@ class AblationFlags:
             parts.append("proto-prepass=on")
         if self.proto_postpass:
             parts.append("proto-postpass=on")
+        if self.split_optimizers:
+            note = "" if self.use_local_adapter else ",inactive:no-local-adapter"
+            parts.append(f"split-optimizers=on(kd-on={self.kd_on}{note})")
         return " | ".join(parts)
 
 
@@ -103,6 +124,10 @@ def resolve_ablation_flags(run_config: Mapping[str, Any]) -> AblationFlags:
             "are promoted from the local adapter, which is not used when it is disabled."
         )
 
+    kd_on = str(run_config.get("kd-on", "local")).strip().lower()
+    if kd_on not in VALID_KD_ON:
+        raise ValueError(f"Unknown kd-on '{kd_on}'. Expected one of {VALID_KD_ON}.")
+
     mu = float(run_config.get("proximal-mu", 0.0))
     if algorithm == "fedprox":
         if mu <= 0.0:
@@ -127,4 +152,8 @@ def resolve_ablation_flags(run_config: Mapping[str, Any]) -> AblationFlags:
         proto_postpass=as_bool(
             run_config.get("proto-postpass", False), "proto-postpass"
         ),
+        split_optimizers=as_bool(
+            run_config.get("split-optimizers", False), "split-optimizers"
+        ),
+        kd_on=kd_on,
     )

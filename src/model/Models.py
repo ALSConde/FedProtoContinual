@@ -174,9 +174,16 @@ class FCLModel(nn.Module):
         classifier_scale_init: float = 20.0,
         a_max: int = 3,
         use_local_adapter: bool = True,
+        near_identity_eps_local: float = 1e-3,
+        alpha_init: float = 0.0,
     ):
         super().__init__()
         self.use_local_adapter = use_local_adapter
+        # Init scale of the LOCAL adapter weights and initial value of the alpha-gate logit
+        # (alpha = sigmoid(beta)/2, so 0.0 -> 0.25). The defaults reproduce the previous
+        # behaviour; larger values start the personalization branch less dormant.
+        self.near_identity_eps_local = near_identity_eps_local
+        self.alpha_init = alpha_init
         self.hidden_dim = hidden_dim
         self.d_hat_local = d_hat_local
         self.a_max = a_max
@@ -184,8 +191,12 @@ class FCLModel(nn.Module):
         self.adapter_global = Adapter(
             in_features=hidden_dim, down_features=d_hat_global
         )
-        self.adapter_local = Adapter(in_features=hidden_dim, down_features=d_hat_local)
-        self.alpha_gate = AlphaGate(embedding_dim=hidden_dim)
+        self.adapter_local = Adapter(
+            in_features=hidden_dim,
+            down_features=d_hat_local,
+            near_identity_eps=near_identity_eps_local,
+        )
+        self.alpha_gate = AlphaGate(embedding_dim=hidden_dim, alpha_init=alpha_init)
         self.classifier = PrototypeClassifier(
             embedding_dim=hidden_dim, scale_init=classifier_scale_init
         )
@@ -209,7 +220,9 @@ class FCLModel(nn.Module):
         x_global = self.adapter_global(feats)
         incorporated = self.incorporated_delta(x_global)
         if with_shadow and len(self.shadow_adapters) > 0:
-            incorporated = incorporated + self.shadow_adapters[0].forward_delta(x_global)
+            incorporated = incorporated + self.shadow_adapters[0].forward_delta(
+                x_global
+            )
         x_shared = x_global + incorporated
         if not self.use_local_adapter:
             # Ablation: no personalization branch, local == shared embedding.
@@ -240,6 +253,31 @@ class FCLModel(nn.Module):
         delta_local = self.adapter_local.forward_delta(x_global)
         local_base = self.alpha_gate(x_global, delta_local)
         return local_base + incorporated, x_shared, local_base + incorporated + shadow
+
+    def embed_split(
+        self, x: torch.Tensor, with_shadow: bool = False
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor]:
+        """Embeddings for the split-optimizers objective (requires the local adapter).
+
+        Returns (h_g, h_g_with, h_l):
+          h_g      shared embedding (x_global + incorporated), differentiable w.r.t. the
+                   shared parameters only;
+          h_g_with the same with the shadow adapter added (None unless with_shadow);
+          h_l      personalised embedding whose input x_global and incorporated deltas
+                   are DETACHED, so a loss on h_l only moves the local adapter and the
+                   alpha gate, never the shared parameters.
+        """
+        feats = self.feature_extractor(x)
+        x_global = self.adapter_global(feats)
+        incorporated = self.incorporated_delta(x_global)
+        h_g = x_global + incorporated
+        h_g_with = None
+        if with_shadow and len(self.shadow_adapters) > 0:
+            h_g_with = h_g + self.shadow_adapters[0].forward_delta(x_global)
+        x_in = x_global.detach()
+        delta_local = self.adapter_local.forward_delta(x_in)
+        h_l = self.alpha_gate(x_in, delta_local) + incorporated.detach()
+        return h_g, h_g_with, h_l
 
     def local_contribution_ratio(self, x: torch.Tensor) -> torch.Tensor:
         if not self.use_local_adapter:
@@ -343,9 +381,13 @@ class FCLModel(nn.Module):
     def reset_local_branch(self) -> None:
         device = next(self.parameters()).device
         self.adapter_local = Adapter(
-            in_features=self.hidden_dim, down_features=self.d_hat_local
+            in_features=self.hidden_dim,
+            down_features=self.d_hat_local,
+            near_identity_eps=self.near_identity_eps_local,
         ).to(device)
-        self.alpha_gate = AlphaGate(embedding_dim=self.hidden_dim).to(device)
+        self.alpha_gate = AlphaGate(
+            embedding_dim=self.hidden_dim, alpha_init=self.alpha_init
+        ).to(device)
 
     def load_incorporated_topology(self, topologies: list) -> None:
         if len(topologies) > self.a_max:

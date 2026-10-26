@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Sequence, Union
+from typing import Callable, Mapping, Optional, Sequence, Union
 import torch
 from torch.utils.data import TensorDataset, random_split, DataLoader
 import torch.nn.functional as F
@@ -151,6 +151,212 @@ def collect_prototype_stats(
         model.train(was_training)
 
 
+_LR_SCALE_KEYS = ("extractor", "adapter_global", "local")
+
+
+def _build_param_groups(
+    model: FCLModel, lr: float, lr_scales: Optional[Mapping[str, float]] = None
+) -> dict[str, tuple[list, float]]:
+    """Every model parameter in exactly one named group, with its learning rate.
+
+    extractor       feature_extractor
+    adapter_global  adapter_global + incorporated adapters + shadow adapters (all shared)
+    local           adapter_local + alpha_gate + classifier.scale (never leave the client)
+
+    lr_scales multiplies the round lr per group (default 1.0 everywhere, which is
+    numerically identical to a single Adam over model.parameters()).
+    """
+    scales = {k: 1.0 for k in _LR_SCALE_KEYS}
+    for key, value in (lr_scales or {}).items():
+        if key not in scales:
+            raise ValueError(
+                f"Unknown lr scale '{key}'. Expected one of {_LR_SCALE_KEYS}."
+            )
+        scales[key] = float(value)
+    for key, value in scales.items():
+        if value <= 0.0:
+            raise ValueError(f"lr scale '{key}' must be > 0 (got {value}).")
+
+    extractor = list(model.feature_extractor.parameters())
+    shared_adapters = [
+        p
+        for module in (
+            model.adapter_global,
+            model.incorporated_adapters,
+            model.shadow_adapters,
+        )
+        for p in module.parameters()
+    ]
+    local = [
+        p
+        for module in (model.adapter_local, model.alpha_gate)
+        for p in module.parameters()
+    ] + [model.classifier.scale]
+
+    covered = {id(p) for p in extractor + shared_adapters + local}
+    missing = [n for n, p in model.named_parameters() if id(p) not in covered]
+    if missing:
+        raise RuntimeError(
+            f"Parameters not assigned to any optimizer group: {missing}. Update "
+            "_build_param_groups when adding modules to FCLModel."
+        )
+    return {
+        "extractor": (extractor, lr * scales["extractor"]),
+        "adapter_global": (shared_adapters, lr * scales["adapter_global"]),
+        "local": (local, lr * scales["local"]),
+    }
+
+
+def _build_optimizers(
+    model: FCLModel,
+    lr: float,
+    lr_scales: Optional[Mapping[str, float]],
+    split: bool,
+) -> tuple[torch.optim.Optimizer, Optional[torch.optim.Optimizer]]:
+    """split=False: one Adam over all groups. split=True: (shared optimizer, local
+    optimizer) over disjoint parameter sets."""
+    groups = _build_param_groups(model, lr, lr_scales)
+
+    def _pg(names):
+        return [
+            {"params": groups[n][0], "lr": groups[n][1]} for n in names if groups[n][0]
+        ]
+
+    if not split:
+        return torch.optim.Adam(_pg(("extractor", "adapter_global", "local"))), None
+    return (
+        torch.optim.Adam(_pg(("extractor", "adapter_global"))),
+        torch.optim.Adam(_pg(("local",))),
+    )
+
+
+def _logits_frozen_scale(classifier, h: torch.Tensor) -> torch.Tensor:
+    """Classifier logits with the learnable scale treated as a constant, so the shared
+    objective never updates a parameter that belongs to the local optimizer."""
+    return (
+        F.linear(F.normalize(h, dim=1), F.normalize(classifier.prototypes, dim=1))
+        * classifier.scale.detach()
+    )
+
+
+def _kd_term(
+    model: FCLModel,
+    h: torch.Tensor,
+    h_teacher: torch.Tensor,
+    known_sorted: list,
+    kd_mode: str,
+    kd_temperature: float,
+) -> Optional[torch.Tensor]:
+    if kd_mode == "embedding_mse":
+        return distillation_loss(h, h_teacher)
+    reference = (
+        model.classifier.prototypes[known_sorted] if len(known_sorted) >= 2 else None
+    )
+    return distillation_loss_kl(h, h_teacher, reference, temperature=kd_temperature)
+
+
+def _split_train_step(
+    model: FCLModel,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    memory: PrototypeMemory,
+    opt_g: torch.optim.Optimizer,
+    opt_l: torch.optim.Optimizer,
+    *,
+    ce_index,
+    known_consolidated: set,
+    known_sorted: list,
+    lambda_proto_shared: float,
+    lambda_proto_local: float,
+    lambda_kd_local: float,
+    lambda_kd_shared: float,
+    embed_global: Optional[Callable],
+    kd_mode: str,
+    kd_temperature: float,
+    proximal_mu: float,
+    prox_params: list,
+    prox_ref: list,
+    lambda_mofe: float,
+    mofe_margin: float,
+) -> Optional[torch.Tensor]:
+    """One optimisation step with two disjoint objectives.
+
+        L_g = CE(h_g) + lambda_proto_shared * L_proto(h_g) [+ lambda_kd_shared * KD]
+              [+ mu/2 * ||w - w_round_start||^2]            -> opt_g (shared params)
+        L_l = CE(h_l) + lambda_proto_local  * L_proto(h_l) [+ lambda_kd_local  * KD]
+                                                            -> opt_l (local params)
+
+    h_l is built from detached shared features (FCLModel.embed_split), so the two
+    backward passes touch disjoint parameters. With a shadow adapter on probation the
+    paired CE / MoFe hinge acts on the shared side (the shadow adapter is a shared module).
+    Returns the (detached) sum of both losses, or None on the cold-start skip.
+    """
+    has_shadow = len(model.shadow_adapters) > 0
+    h_g, h_g_with, h_l = model.embed_split(x, with_shadow=has_shadow)
+    memory.update(h_g, y, check_bounds=False)  # h_g is the deployed shared embedding
+    if model.classifier.num_classes == 0:
+        return None  # cold start: only statistics
+
+    protos = model.classifier.prototypes
+    opt_g.zero_grad()
+    opt_l.zero_grad()
+
+    # ---- shared objective -------------------------------------------------------
+    ce_g = _class_ce(_logits_frozen_scale(model.classifier, h_g), y, ce_index)
+    lp_g = prototype_alignment_loss(h_g, y, protos, known_consolidated)
+    if has_shadow:
+        ce_with = _class_ce(
+            _logits_frozen_scale(model.classifier, h_g_with), y, ce_index
+        )
+        loss_g = 0.5 * (ce_g + ce_with)
+        if lambda_mofe > 0.0:
+            loss_g = loss_g + lambda_mofe * F.relu(
+                ce_with - ce_g.detach() + mofe_margin
+            )
+        lp_with = prototype_alignment_loss(h_g_with, y, protos, known_consolidated)
+        if lp_g is not None and lp_with is not None:
+            loss_g = loss_g + lambda_proto_shared * 0.5 * (lp_g + lp_with)
+        elif lp_g is not None:
+            loss_g = loss_g + lambda_proto_shared * lp_g
+    else:
+        loss_g = ce_g
+        if lp_g is not None:
+            loss_g = loss_g + lambda_proto_shared * lp_g
+
+    # ---- local objective ---------------------------------------------------------
+    ce_l = _class_ce(model.classifier(h_l), y, ce_index)
+    loss_l = ce_l
+    lp_l = prototype_alignment_loss(h_l, y, protos, known_consolidated)
+    if lp_l is not None:
+        loss_l = loss_l + lambda_proto_local * lp_l
+
+    # ---- knowledge distillation (teacher: frozen shared branch of the step) -----
+    if embed_global is not None and (lambda_kd_local > 0.0 or lambda_kd_shared > 0.0):
+        h_teacher = embed_global(x)
+        if lambda_kd_shared > 0.0:
+            kd_g = _kd_term(
+                model, h_g, h_teacher, known_sorted, kd_mode, kd_temperature
+            )
+            if kd_g is not None:
+                loss_g = loss_g + lambda_kd_shared * kd_g
+        if lambda_kd_local > 0.0:
+            kd_l = _kd_term(
+                model, h_l, h_teacher, known_sorted, kd_mode, kd_temperature
+            )
+            if kd_l is not None:
+                loss_l = loss_l + lambda_kd_local * kd_l
+
+    if proximal_mu > 0.0:
+        prox = sum((p - r).pow(2).sum() for p, r in zip(prox_params, prox_ref))
+        loss_g = loss_g + 0.5 * proximal_mu * prox
+
+    loss_g.backward()
+    loss_l.backward()
+    opt_g.step()
+    opt_l.step()
+    return (loss_g + loss_l).detach()
+
+
 # Function to load data -- With sintetic data for testing purposes
 def load_data(
     partition_id: int,
@@ -204,10 +410,21 @@ def train_fn(
     mofe_margin: float = 0.0,
     local_class_ids: Optional[Sequence[int]] = None,
     proto_prepass: bool = False,
+    lr_scales: Optional[Mapping[str, float]] = None,
+    split_optimizers: bool = False,
+    lambda_proto_shared: Optional[float] = None,
+    lambda_proto_local: Optional[float] = None,
+    lambda_kd_shared: float = 0.0,
 ) -> float:
     """`local_class_ids`: when given, the CE is restricted to those classes (flag
     ce-local-classes). `proto_prepass`: build provisional local prototypes for classes
-    without a server prototype before the first step (flag proto-prepass)."""
+    without a server prototype before the first step (flag proto-prepass).
+
+    `lr_scales`: per-group multipliers of `lr` (keys: extractor, adapter_global, local).
+    `split_optimizers`: two optimizers/objectives (see _split_train_step); it needs the
+    local adapter and is otherwise ignored. In that mode `lambda_kd` is the weight of the
+    KD term on the LOCAL embedding and `lambda_kd_shared` the one on the SHARED embedding;
+    `lambda_proto_shared/local` default to `lambda_proto`."""
     if kd_mode not in ("kl", "embedding_mse"):
         raise ValueError(
             f"Invalid kd_mode: {kd_mode}. Must be 'kl' or 'embedding_mse'."
@@ -218,7 +435,8 @@ def train_fn(
     known_consolidated = known_consolidated or set()
     known_sorted = sorted(known_consolidated)
 
-    use_kd = lambda_kd > 0.0
+    split_active = bool(split_optimizers and model.use_local_adapter)
+    use_kd = lambda_kd > 0.0 or (split_active and lambda_kd_shared > 0.0)
     embed_global = None
     if use_kd:
         embed_global = (
@@ -232,7 +450,9 @@ def train_fn(
         prox_params = model.global_branch_parameters()
         prox_ref = [p.detach().clone() for p in prox_params]
 
-    optmizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optmizer, opt_local = _build_optimizers(model, lr, lr_scales, split_active)
+    lp_shared = lambda_proto if lambda_proto_shared is None else lambda_proto_shared
+    lp_local = lambda_proto if lambda_proto_local is None else lambda_proto_local
     running_loss, n_batches = (
         0.0,
         0,
@@ -246,6 +466,35 @@ def train_fn(
         for x, y in _device_batches(
             trainloader, device, max_classes=memory.num_classes
         ):
+            if split_active:
+                step_loss = _split_train_step(
+                    model,
+                    x,
+                    y,
+                    memory,
+                    optmizer,
+                    opt_local,
+                    ce_index=ce_index,
+                    known_consolidated=known_consolidated,
+                    known_sorted=known_sorted,
+                    lambda_proto_shared=lp_shared,
+                    lambda_proto_local=lp_local,
+                    lambda_kd_local=lambda_kd,
+                    lambda_kd_shared=lambda_kd_shared,
+                    embed_global=embed_global,
+                    kd_mode=kd_mode,
+                    kd_temperature=kd_temperature,
+                    proximal_mu=proximal_mu,
+                    prox_params=prox_params,
+                    prox_ref=prox_ref,
+                    lambda_mofe=lambda_mofe,
+                    mofe_margin=mofe_margin,
+                )
+                if step_loss is not None:
+                    running_loss = running_loss + step_loss
+                    n_batches += 1
+                continue
+
             has_shadow = len(model.shadow_adapters) > 0
             if has_shadow:
                 # Candidate on probation: both views of the same batch. Prototypes are

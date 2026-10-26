@@ -75,7 +75,20 @@ def _build_model(context: Context) -> FCLModel:
         d_hat_local=int(context.run_config["d-hat-local"]),
         a_max=int(context.run_config.get("a-max", 3)),
         use_local_adapter=flags.use_local_adapter,
+        near_identity_eps_local=float(
+            context.run_config.get("near-identity-eps-local", 1e-3)
+        ),
+        alpha_init=float(context.run_config.get("alpha-init", 0.0)),
     )
+
+
+def _inherit(context: Context, key: str, fallback_key: str, default: float) -> float:
+    """Run-config value of `key`; a negative value (the pyproject default) or a missing
+    key means "same as `fallback_key`"."""
+    value = float(context.run_config.get(key, -1.0))
+    if value >= 0.0:
+        return value
+    return float(context.run_config.get(fallback_key, default))
 
 
 def _param_metrics(model: FCLModel, base_total: int) -> dict:
@@ -554,6 +567,17 @@ def train(msg: Message, context: Context) -> Message:
     else:
         lambda_kd, frozen_embed_fn = 0.0, None
 
+    # Split optimizers: KD may act on the local embedding, the shared one, or both. The
+    # teacher only exists after the first step (frozen_embed_fn is None before), so the
+    # presence of the teacher gates both weights.
+    split_active = flags.split_optimizers and flags.use_local_adapter
+    lambda_kd_shared = 0.0
+    if split_active:
+        if flags.kd_on in ("shared", "both") and frozen_embed_fn is not None:
+            lambda_kd_shared = _inherit(context, "lambda-kd-shared", "lambda-kd", 0.5)
+        if flags.kd_on == "shared":
+            lambda_kd = 0.0
+
     train_loss = train_fn(
         model,
         train_loader,
@@ -572,6 +596,17 @@ def train(msg: Message, context: Context) -> Message:
         mofe_margin=float(context.run_config.get("mofe-train-margin", 0.0)),
         local_class_ids=sorted(local_class_ids) if flags.ce_local_classes else None,
         proto_prepass=flags.proto_prepass,
+        lr_scales={
+            "extractor": float(context.run_config.get("lr-scale-extractor", 1.0)),
+            "adapter_global": float(
+                context.run_config.get("lr-scale-adapter-global", 1.0)
+            ),
+            "local": float(context.run_config.get("lr-scale-local", 1.0)),
+        },
+        split_optimizers=flags.split_optimizers,
+        lambda_proto_shared=_inherit(context, "lambda-proto-shared", "lambda-proto", 1.0),
+        lambda_proto_local=_inherit(context, "lambda-proto-local", "lambda-proto", 1.0),
+        lambda_kd_shared=lambda_kd_shared,
     )
 
     if flags.proto_postpass:
