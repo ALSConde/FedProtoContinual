@@ -884,6 +884,56 @@ def compute_local_contribution_ratio(
     return float(total_ratio) / total_n
 
 
+def compute_interference(
+    model: FCLModel,
+    loader: DataLoader,
+    known_consolidated: set,
+    device: torch.device,
+) -> Optional[float]:
+    """Crowding of the classes present in the local data against the old global prototypes.
+
+    For every local class c: p_c is its local prototype (mean of the normalised shared
+    embeddings, what the pre-pass builds) while the server has no prototype for it yet, and
+    the global prototype afterwards. "Old" classes are the known ones that are NOT in the
+    local data. Returns the mean over local classes of max_old cos(p_c, p_old): close to 1
+    when the classes being learned sit where old classes already are (the situation in
+    which learning them conflicts with keeping the old geometry). None when there is no
+    local data or no old class with a prototype (e.g. the first step).
+    """
+    model.eval()
+    with torch.no_grad():
+        sums: dict = {}
+        counts: dict = {}
+        for x, y in _device_batches(loader, device):
+            _, h_shared = model.embed_both(x)
+            h_shared = F.normalize(h_shared, dim=1)
+            for c in y.unique().tolist():
+                m = y == c
+                sums[c] = sums.get(c, 0) + h_shared[m].sum(0)
+                counts[c] = counts.get(c, 0) + int(m.sum())
+        if not sums:
+            return None
+        protos = model.classifier.prototypes
+
+        def _has_proto(c: int) -> bool:
+            return c < protos.shape[0] and float(protos[c].norm()) > 0.0
+
+        local = {
+            c: (
+                F.normalize(protos[c], dim=0)
+                if (c in known_consolidated and _has_proto(c))
+                else F.normalize(sums[c] / counts[c], dim=0)
+            )
+            for c in sums
+        }
+        old = [c for c in known_consolidated if c not in sums and _has_proto(c)]
+        if not old:
+            return None
+        p_old = F.normalize(protos[old], dim=1)
+        values = [float((p_old @ p).max()) for p in local.values()]
+        return sum(values) / len(values)
+
+
 def compute_expansion_signal(
     model: FCLModel,
     loader: DataLoader,

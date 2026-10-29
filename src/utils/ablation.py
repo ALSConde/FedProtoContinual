@@ -31,6 +31,13 @@ experiment ladder can be launched by changing flags only:
                            student local scale). kd-logit-scale=1.0 is the previous behaviour;
                            ~20 matches the classifier's nominal scale.
 
+Expansion trigger (enable-expansion):
+    expansion-signal       g (default, saturation signal) | interference (crowding of the
+                           local classes against the old global prototypes) | combined
+                           (max of both). interference-floor (default 0.5) maps the cosine
+                           to [0, 1]; expansion-cooldown (default 0 = off) is the minimum
+                           number of rounds between two expansions of a client.
+
 Learning-rate multipliers (always available, default 1.0; applied on top of the round lr):
 lr-scale-extractor, lr-scale-adapter-global (global + incorporated + shadow adapters) and
 lr-scale-local (local adapter + alpha gate + classifier scale). Model init knobs:
@@ -48,6 +55,7 @@ from typing import Any, Mapping
 VALID_FL_ALGORITHMS = ("fedavg", "fedprox")
 VALID_KD_ON = ("local", "shared", "both")
 VALID_KD_SCALE_MODES = ("const", "local", "hybrid")
+VALID_EXPANSION_SIGNALS = ("g", "interference", "combined")
 
 _TRUE = {"true", "1", "yes", "on"}
 _FALSE = {"false", "0", "no", "off"}
@@ -80,6 +88,7 @@ class AblationFlags:
     split_optimizers: bool = False
     kd_on: str = "local"
     kd_scale_mode: str = "const"
+    expansion_signal: str = "g"
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -100,6 +109,8 @@ class AblationFlags:
             parts.append("proto-prepass=on")
         if self.proto_postpass:
             parts.append("proto-postpass=on")
+        if self.expansion_signal != "g":
+            parts.append(f"expansion-signal={self.expansion_signal}")
         if self.kd_scale_mode != "const":
             parts.append(f"kd-scale-mode={self.kd_scale_mode}")
         if self.split_optimizers:
@@ -143,6 +154,12 @@ def resolve_ablation_flags(run_config: Mapping[str, Any]) -> AblationFlags:
             f"Unknown kd-scale-mode '{kd_scale_mode}'. Expected one of {VALID_KD_SCALE_MODES}."
         )
 
+    expansion_signal = str(run_config.get("expansion-signal", "g")).strip().lower()
+    if expansion_signal not in VALID_EXPANSION_SIGNALS:
+        raise ValueError(
+            f"Unknown expansion-signal '{expansion_signal}'. Expected one of {VALID_EXPANSION_SIGNALS}."
+        )
+
     mu = float(run_config.get("proximal-mu", 0.0))
     if algorithm == "fedprox":
         if mu <= 0.0:
@@ -172,4 +189,5 @@ def resolve_ablation_flags(run_config: Mapping[str, Any]) -> AblationFlags:
         ),
         kd_on=kd_on,
         kd_scale_mode=kd_scale_mode,
+        expansion_signal=expansion_signal,
     )

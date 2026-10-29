@@ -28,6 +28,7 @@ from .ClientTask import (
     train_fn,
     test_fn,
     compute_expansion_signal,
+    compute_interference,
     vote_on_candidate,
     build_mofe_payload,
 )
@@ -45,6 +46,7 @@ app = ClientApp()
 
 _LOCAL_STATE_KEY = "local_modules"
 _CANDIDACY_STATE_KEY = "candidacy_state"
+_LAST_EXPANSION_ROUND_KEY = "expansion_last_round"
 _PROMOTED_CHECKPOINT_KEY = "promoted_local_checkpoint"
 _VOTE_ADAPT_CHECKPOINT_KEY = "vote_adapt_checkpoint"
 _KD_TEACHER_SNAPSHOT_KEY = "kd_teacher_snapshot"
@@ -80,6 +82,20 @@ def _build_model(context: Context) -> FCLModel:
         ),
         alpha_init=float(context.run_config.get("alpha-init", 0.0)),
     )
+
+
+def _expansion_term_metrics(**values: Optional[float]) -> dict:
+    """Per-round expansion diagnostics with a fixed key set (Flower aggregates the metrics
+    of all clients, so every client must emit the same keys). A missing value is emitted as
+    0.0 with <key>_valid = 0.0; the weighted mean over the clients that have it is then
+    mean(<key>) / mean(<key>_valid), because both use the same weights."""
+    names = ("g_cosine_old", "g_cosine_new", "g_entropy", "interference", "expansion_signal")
+    out: dict = {}
+    for name in names:
+        value = values.get(name)
+        out[name] = 0.0 if value is None else float(value)
+        out[f"{name}_valid"] = 0.0 if value is None else 1.0
+    return out
 
 
 def _inherit(context: Context, key: str, fallback_key: str, default: float) -> float:
@@ -488,6 +504,7 @@ def train(msg: Message, context: Context) -> Message:
                 "expanded_width": 0,
                 "expanded_depth": 0,
                 "expansion_g": 0.0,
+                **_expansion_term_metrics(),
                 "alpha_mean": 0.0,
                 "contribution_ratio": 0.0,
                 "classifier_scale": float(model.classifier.scale.detach()),
@@ -521,8 +538,10 @@ def train(msg: Message, context: Context) -> Message:
             model.classifier._expand(required_num_classes)
 
     expanded_width, expanded_depth, expansion_g = 0, 0, 0.0
-    # The saturation signal g is always logged when a local adapter exists (useful to
-    # calibrate theta-exp); the expansion itself only happens with enable-expansion.
+    term_metrics = _expansion_term_metrics()
+    # The saturation signal g, its terms and the interference are always logged when a
+    # local adapter exists (useful to calibrate theta-exp and interference-floor); the
+    # expansion itself only happens with enable-expansion.
     if flags.use_local_adapter and model.classifier.num_classes > 0:
         signal = compute_expansion_signal(
             model,
@@ -531,21 +550,52 @@ def train(msg: Message, context: Context) -> Message:
             scale=model.classifier.scale.item(),
             device=device,
         )
+        interference = compute_interference(model, train_loader, known_consolidated, device)
 
-        if signal is not None:
-            criterion = ExpansionCriterion(theta_exp=context.run_config["theta-exp"])
-            result = criterion.compute(**signal)
-            expansion_g = float(result["g"])
+        criterion = ExpansionCriterion(
+            theta_exp=context.run_config["theta-exp"],
+            signal_mode=flags.expansion_signal,
+            interference_floor=float(context.run_config.get("interference-floor", 0.5)),
+        )
+        result = criterion.compute(**signal) if signal is not None else None
+        g_value = float(result["g"]) if result is not None else None
+        signal_value = criterion.signal(g_value, interference)
+        if result is not None:
+            expansion_g = g_value
+        term_metrics = _expansion_term_metrics(
+            g_cosine_old=result["g_cosine_old"] if result is not None else None,
+            g_cosine_new=result["g_cosine_new"] if result is not None else None,
+            g_entropy=result["g_entropy"] if result is not None else None,
+            interference=interference,
+            expansion_signal=signal_value if (result is not None or interference is not None) else None,
+        )
 
-            if flags.enable_expansion:
+        # With expansion-signal=g the decision only exists when g does (previous behaviour,
+        # including not touching the adapter's attempt counters otherwise).
+        can_decide = result is not None or (
+            flags.expansion_signal != "g" and interference is not None
+        )
+        if can_decide:
+            cooldown = int(context.run_config.get("expansion-cooldown", 0))
+            last_expansion = (
+                int(context.state[_LAST_EXPANSION_ROUND_KEY]["round"])
+                if _LAST_EXPANSION_ROUND_KEY in context.state
+                else -(10**9)
+            )
+            expansion_allowed = cooldown <= 0 or current_round - last_expansion >= cooldown
+
+            if flags.enable_expansion and expansion_allowed:
                 params_local_before = model.parameter_report()["adapter_local"]
                 kind = criterion.step(
-                    model.adapter_local, result["g"], g_reduced_below_threshold=False
+                    model.adapter_local, signal_value, g_reduced_below_threshold=False
                 )
                 if kind is not None:
+                    context.state[_LAST_EXPANSION_ROUND_KEY] = ConfigRecord({"round": current_round})
                     params_local_after = model.parameter_report()["adapter_local"]
                     print(
-                        f"[client {partition_id} expands in {kind} mode (g={result['g']:.4f}) "
+                        f"[client {partition_id} expands in {kind} mode "
+                        f"(signal={signal_value:.4f}, g={expansion_g:.4f}, "
+                        f"interference={'n/a' if interference is None else f'{interference:.4f}'}) "
                         f"| adapter_local params {params_local_before} -> {params_local_after}]"
                     )
                     expanded_width = int(kind == "width")
@@ -658,6 +708,7 @@ def train(msg: Message, context: Context) -> Message:
             "expanded_width": expanded_width,
             "expanded_depth": expanded_depth,
             "expansion_g": expansion_g,
+            **term_metrics,
             "alpha_mean": alpha_mean,
             # local, learned per client (never aggregated): logged to see how far it drifts from 20
             "classifier_scale": float(model.classifier.scale.detach()),

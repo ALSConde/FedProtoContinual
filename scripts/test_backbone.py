@@ -872,9 +872,7 @@ def parse_args():
     p.add_argument("--lr-scale-extractor", type=float, default=1.0)
     p.add_argument("--lr-scale-adapter-global", type=float, default=1.0)
     p.add_argument("--lr-scale-local", type=float, default=1.0)
-    p.add_argument(
-        "--kd-scale-mode", choices=["const", "local", "hybrid"], default="const"
-    )
+    p.add_argument("--kd-scale-mode", choices=["const", "local", "hybrid"], default="const")
     p.add_argument("--kd-logit-scale", type=float, default=1.0)
     # general
     p.add_argument("--seed", type=int, default=0)

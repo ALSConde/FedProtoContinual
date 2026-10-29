@@ -167,9 +167,18 @@ class PredictionFlowMonitor:
     """
 
     _FIELDNAMES = [
-        "round", "step", "n_old", "old_correct", "old_to_current", "old_to_other_old",
-        "n_cur", "cur_correct", "cur_to_old", "cur_to_other_cur",
-        "pred_share_current", "true_share_current",
+        "round",
+        "step",
+        "n_old",
+        "old_correct",
+        "old_to_current",
+        "old_to_other_old",
+        "n_cur",
+        "cur_correct",
+        "cur_to_old",
+        "cur_to_other_cur",
+        "pred_share_current",
+        "true_share_current",
     ]
 
     def __init__(self, output_dir: str) -> None:
@@ -184,7 +193,9 @@ class PredictionFlowMonitor:
 
     @staticmethod
     def summarize(
-        confusion: torch.Tensor, current_classes: Iterable[int], seen_classes: Iterable[int]
+        confusion: torch.Tensor,
+        current_classes: Iterable[int],
+        seen_classes: Iterable[int],
     ) -> dict:
         size = confusion.shape[0]
         cur = sorted(c for c in set(current_classes) if c < size)
@@ -212,7 +223,9 @@ class PredictionFlowMonitor:
             "cur_correct": cur_correct,
             "cur_to_old": cur_to_old,
             "cur_to_other_cur": n_cur - cur_correct - cur_to_old,
-            "pred_share_current": (_block(list(range(size)), cur) / total) if total else None,
+            "pred_share_current": (
+                (_block(list(range(size)), cur) / total) if total else None
+            ),
             "true_share_current": (n_cur / total) if total else None,
         }
 
@@ -307,7 +320,9 @@ def evaluate_global_model(
     for i in range(0, X.shape[0], chunk_size):
         x, y = X[i : i + chunk_size], Y[i : i + chunk_size]
         h = _global_embed(model, x)
-        valid = (y < num_classes).to(h.dtype)  # classes the classifier does not know yet are skipped
+        valid = (y < num_classes).to(
+            h.dtype
+        )  # classes the classifier does not know yet are skipped
         y_safe = y.clamp(max=num_classes - 1)
         logits = model.classifier(h)
         ce = F.cross_entropy(logits, y_safe, reduction="none")
@@ -327,7 +342,12 @@ def evaluate_global_model(
     seen = ct.nonzero(as_tuple=True)[0].tolist()
     per_class_acc = {c: float(cc[c]) / float(ct[c]) for c in seen}
     per_class_n = {c: int(ct[c]) for c in seen}
-    result = (float(loss_sum) / total_n, float(n_correct) / total_n, per_class_acc, per_class_n)
+    result = (
+        float(loss_sum) / total_n,
+        float(n_correct) / total_n,
+        per_class_acc,
+        per_class_n,
+    )
     if return_confusion:
         conf = confusion.view(num_classes, num_classes).round().long().cpu()
         return (*result, conf)

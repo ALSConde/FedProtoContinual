@@ -315,7 +315,9 @@ def main(grid: Grid, context: Context) -> None:
                                 max(current_round, 1), rps, schedule
                             ),
                             allowed_classes,
-                            step=current_step_index(max(current_round, 1), rps, schedule),
+                            step=current_step_index(
+                                max(current_round, 1), rps, schedule
+                            ),
                             save_matrix=in_step in (0, rps - 1),
                         )
                     )

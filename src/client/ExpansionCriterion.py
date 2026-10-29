@@ -6,6 +6,8 @@ import torch
 from src.model.blocks.Adapter import Adapter
 from src.utils.losses.Losses import normalized_sq_distance
 
+VALID_SIGNAL_MODES = ("g", "interference", "combined")
+
 
 class ExpansionCriterion:
     def __init__(
@@ -15,11 +17,21 @@ class ExpansionCriterion:
         w_cos_new: float = 0.4,
         w_entropy: float = 0.2,
         max_width_attempts: int = 3,
+        signal_mode: str = "g",
+        interference_floor: float = 0.5,
     ) -> None:
         assert (
             abs(w_cos_old + w_cos_new + w_entropy - 1.0) < 1e-6
         ), "The weights w_cos_old + w_cos_new + w_entropy have to sum 1."
 
+        if signal_mode not in VALID_SIGNAL_MODES:
+            raise ValueError(
+                f"Unknown signal_mode '{signal_mode}'. Expected one of {VALID_SIGNAL_MODES}."
+            )
+        if not 0.0 <= interference_floor < 1.0:
+            raise ValueError("interference_floor must be in [0, 1).")
+        self.signal_mode = signal_mode
+        self.interference_floor = interference_floor
         self.theta_exp = theta_exp
         self.base_weights = {"old": w_cos_old, "new": w_cos_new, "entropy": w_entropy}
         self.max_width_attempts = max_width_attempts
@@ -86,6 +98,33 @@ class ExpansionCriterion:
             "g_entropy": terms["entropy"],
             "trigger": g > self.theta_exp,
         }
+
+    def signal(self, g: Optional[float], interference: Optional[float]) -> float:
+        """Scalar that is compared with theta_exp and sizes the width growth.
+
+        interference is the crowding of the local classes against the old global
+        prototypes (ClientTask.compute_interference, a cosine in [-1, 1]); it is mapped to
+        [0, 1] by the floor: s_interf = clip((interference - floor) / (1 - floor), 0, 1).
+          g             the saturation signal g (previous behaviour)
+          interference  s_interf only (0 when there are no old classes to crowd)
+          combined      max(g, s_interf)
+        """
+        s_interf = None
+        if interference is not None:
+            s_interf = min(
+                max(
+                    (interference - self.interference_floor)
+                    / (1.0 - self.interference_floor),
+                    0.0,
+                ),
+                1.0,
+            )
+        g = 0.0 if g is None else g
+        if self.signal_mode == "g":
+            return g
+        if self.signal_mode == "interference":
+            return 0.0 if s_interf is None else s_interf
+        return g if s_interf is None else max(g, s_interf)
 
     def decide_expansion_type(
         self, adapter: Adapter, g_reduced_below_threshold: bool
