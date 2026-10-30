@@ -566,6 +566,8 @@ def run_class_il(spec: str, args, data, device) -> dict:
                 lambda_kd_shared=lk_shared,
                 kd_scale_mode=args.kd_scale_mode,
                 kd_logit_scale=args.kd_logit_scale,
+                cls_loss=args.cls_loss,
+                cls_margin=args.cls_margin,
             )
             if args.proto_postpass:
                 collect_prototype_stats(model, loader, memory, device)
@@ -872,8 +874,12 @@ def parse_args():
     p.add_argument("--lr-scale-extractor", type=float, default=1.0)
     p.add_argument("--lr-scale-adapter-global", type=float, default=1.0)
     p.add_argument("--lr-scale-local", type=float, default=1.0)
-    p.add_argument("--kd-scale-mode", choices=["const", "local", "hybrid"], default="const")
+    p.add_argument(
+        "--kd-scale-mode", choices=["const", "local", "hybrid"], default="const"
+    )
     p.add_argument("--kd-logit-scale", type=float, default=1.0)
+    p.add_argument("--cls-loss", choices=["ce", "triplet", "contrastive"], default="ce")
+    p.add_argument("--cls-margin", type=float, default=0.2)
     # general
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="auto")

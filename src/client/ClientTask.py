@@ -79,6 +79,70 @@ def _class_ce(
     return F.cross_entropy(logits.index_select(1, ids), remap[y])
 
 
+VALID_CLS_LOSSES = ("ce", "triplet", "contrastive")
+
+
+def _prototype_metric_loss(
+    model: FCLModel,
+    h: torch.Tensor,
+    y: torch.Tensor,
+    ce_index: Optional[tuple[torch.Tensor, torch.Tensor]],
+    kind: str,
+    margin: float,
+) -> torch.Tensor:
+    """Margin-based alternative to the prototype cross-entropy (flag cls-loss).
+
+    Distances are cosine distances d = 1 - cos(h, prototype) in [0, 2]; the prototypes are the
+    classifier's (constants here, as in the CE) and act as proxies, so no pairs/triplets of
+    samples are needed. Negatives are the other prototypes that exist (non-zero) and, with
+    ce-local-classes, only the classes present in the local data (same scope as the CE).
+      triplet      batch-hard proxy triplet: relu(d(h, p_y) - min_k d(h, p_k) + margin)
+      contrastive  d(h, p_y)^2 + mean_k relu(margin - d(h, p_k))^2
+    Unlike the softmax, a hinge stops pushing a sample once its margin is met, so the push
+    away from other (e.g. old) prototypes is bounded.
+    """
+    protos = model.classifier.prototypes
+    dist = 1.0 - F.normalize(h, dim=1) @ F.normalize(protos, dim=1).t()
+    valid = protos.norm(dim=1) > 0
+    if ce_index is not None:
+        keep = torch.zeros_like(valid)
+        keep[ce_index[0]] = True
+        valid = valid & keep
+    rows = torch.arange(len(y), device=h.device)
+    pos = dist[rows, y]
+    neg_mask = valid.unsqueeze(0).expand_as(dist).clone()
+    neg_mask[rows, y] = False
+    has_neg = neg_mask.any(dim=1)
+    if kind == "triplet":
+        hardest = (
+            torch.where(neg_mask, dist, torch.full_like(dist, 4.0)).min(dim=1).values
+        )
+        per_sample = F.relu(pos - hardest + margin) * has_neg
+        return per_sample.sum() / has_neg.sum().clamp_min(1)
+    if kind == "contrastive":
+        push = (F.relu(margin - dist).pow(2) * neg_mask).sum(dim=1) / neg_mask.sum(
+            dim=1
+        ).clamp_min(1)
+        return (pos.pow(2) + push).mean()
+    raise ValueError(f"Unknown cls loss '{kind}'. Expected one of {VALID_CLS_LOSSES}.")
+
+
+def _cls_loss(
+    model: FCLModel,
+    h: torch.Tensor,
+    y: torch.Tensor,
+    logits: torch.Tensor,
+    ce_index: Optional[tuple[torch.Tensor, torch.Tensor]],
+    cls_loss: str = "ce",
+    cls_margin: float = 0.2,
+) -> torch.Tensor:
+    """The classification objective: the prototype cross-entropy (default) or a margin loss
+    on the same prototypes."""
+    if cls_loss == "ce":
+        return _class_ce(logits, y, ce_index)
+    return _prototype_metric_loss(model, h, y, ce_index, cls_loss, cls_margin)
+
+
 @torch.no_grad()
 def provisional_prototypes(
     model: FCLModel,
@@ -307,6 +371,8 @@ def _split_train_step(
     mofe_margin: float,
     kd_scale_mode: str = "const",
     kd_logit_scale: float = 1.0,
+    cls_loss: str = "ce",
+    cls_margin: float = 0.2,
 ) -> Optional[torch.Tensor]:
     """One optimisation step with two disjoint objectives.
 
@@ -331,11 +397,25 @@ def _split_train_step(
     opt_l.zero_grad()
 
     # ---- shared objective -------------------------------------------------------
-    ce_g = _class_ce(_logits_frozen_scale(model.classifier, h_g), y, ce_index)
+    ce_g = _cls_loss(
+        model,
+        h_g,
+        y,
+        _logits_frozen_scale(model.classifier, h_g),
+        ce_index,
+        cls_loss,
+        cls_margin,
+    )
     lp_g = prototype_alignment_loss(h_g, y, protos, known_consolidated)
     if has_shadow:
-        ce_with = _class_ce(
-            _logits_frozen_scale(model.classifier, h_g_with), y, ce_index
+        ce_with = _cls_loss(
+            model,
+            h_g_with,
+            y,
+            _logits_frozen_scale(model.classifier, h_g_with),
+            ce_index,
+            cls_loss,
+            cls_margin,
         )
         loss_g = 0.5 * (ce_g + ce_with)
         if lambda_mofe > 0.0:
@@ -353,7 +433,9 @@ def _split_train_step(
             loss_g = loss_g + lambda_proto_shared * lp_g
 
     # ---- local objective ---------------------------------------------------------
-    ce_l = _class_ce(model.classifier(h_l), y, ce_index)
+    ce_l = _cls_loss(
+        model, h_l, y, model.classifier(h_l), ce_index, cls_loss, cls_margin
+    )
     loss_l = ce_l
     lp_l = prototype_alignment_loss(h_l, y, protos, known_consolidated)
     if lp_l is not None:
@@ -460,6 +542,8 @@ def train_fn(
     lambda_kd_shared: float = 0.0,
     kd_scale_mode: str = "const",
     kd_logit_scale: float = 1.0,
+    cls_loss: str = "ce",
+    cls_margin: float = 0.2,
 ) -> float:
     """`local_class_ids`: when given, the CE is restricted to those classes (flag
     ce-local-classes). `proto_prepass`: build provisional local prototypes for classes
@@ -471,7 +555,12 @@ def train_fn(
     KD term on the LOCAL embedding and `lambda_kd_shared` the one on the SHARED embedding;
     `lambda_proto_shared/local` default to `lambda_proto`.
     `kd_scale_mode` / `kd_logit_scale`: logit scale of the KL distillation (see _kd_term).
-    """
+    `cls_loss` / `cls_margin`: classification objective, "ce" (default) or a margin loss on
+    the prototypes ("triplet" / "contrastive", see _prototype_metric_loss)."""
+    if cls_loss not in VALID_CLS_LOSSES:
+        raise ValueError(
+            f"Unknown cls_loss '{cls_loss}'. Expected one of {VALID_CLS_LOSSES}."
+        )
     if kd_mode not in ("kl", "embedding_mse"):
         raise ValueError(
             f"Invalid kd_mode: {kd_mode}. Must be 'kl' or 'embedding_mse'."
@@ -538,6 +627,8 @@ def train_fn(
                     mofe_margin=mofe_margin,
                     kd_scale_mode=kd_scale_mode,
                     kd_logit_scale=kd_logit_scale,
+                    cls_loss=cls_loss,
+                    cls_margin=cls_margin,
                 )
                 if step_loss is not None:
                     running_loss = running_loss + step_loss
@@ -560,7 +651,7 @@ def train_fn(
             optmizer.zero_grad()
 
             logits = model.classifier(h)
-            ce = _class_ce(logits, y, ce_index)
+            ce = _cls_loss(model, h, y, logits, ce_index, cls_loss, cls_margin)
 
             l_proto = prototype_alignment_loss(
                 h, y, model.classifier.prototypes, known_consolidated
@@ -570,7 +661,15 @@ def train_fn(
                 # model good without the candidate, so the later with/without
                 # comparison is not biased by co-adaptation. The MoFe hinge only
                 # pushes the 'with' side (the 'without' loss is detached).
-                ce_with = _class_ce(model.classifier(h_with), y, ce_index)
+                ce_with = _cls_loss(
+                    model,
+                    h_with,
+                    y,
+                    model.classifier(h_with),
+                    ce_index,
+                    cls_loss,
+                    cls_margin,
+                )
                 loss = 0.5 * (ce + ce_with)
                 if lambda_mofe > 0.0:
                     loss = loss + lambda_mofe * F.relu(
@@ -899,9 +998,15 @@ def compute_interference(
     when the classes being learned sit where old classes already are (the situation in
     which learning them conflicts with keeping the old geometry). None when there is no
     local data or no old class with a prototype (e.g. the first step).
+
+    This is a diagnostic/trigger pass: it iterates the (shuffling) training loader, which
+    would advance the global RNG and change the batch order of the training that follows.
+    The RNG state is therefore saved and restored, so switching the diagnostics on does not
+    change the training trajectory.
     """
     model.eval()
-    with torch.no_grad():
+    devices = [device] if device.type == "cuda" else []
+    with torch.no_grad(), torch.random.fork_rng(devices=devices):
         sums: dict = {}
         counts: dict = {}
         for x, y in _device_batches(loader, device):

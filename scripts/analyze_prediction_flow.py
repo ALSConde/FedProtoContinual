@@ -22,11 +22,16 @@ import numpy as np
 
 def load(path: Path) -> list[dict]:
     with path.open() as f:
-        return [{k: (float(v) if v not in ("", None) else None) for k, v in r.items()} for r in csv.DictReader(f)]
+        return [
+            {k: (float(v) if v not in ("", None) else None) for k, v in r.items()}
+            for r in csv.DictReader(f)
+        ]
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
     ap.add_argument("results_dir")
     ap.add_argument("--rounds-per-step", type=int, default=10)
     args = ap.parse_args()
@@ -46,25 +51,44 @@ def main() -> int:
             if not r["n_old"]:
                 continue
             k = int(r["round"] - 1) % rps
-            moment = "first round" if k == 0 else ("step end" if k == rps - 1 else ("mid-step" if k == rps // 2 else None))
+            moment = (
+                "first round"
+                if k == 0
+                else (
+                    "step end"
+                    if k == rps - 1
+                    else ("mid-step" if k == rps // 2 else None)
+                )
+            )
             if moment is None:
                 continue
             n = r["n_old"]
             acc[profile][moment].append(
-                (r["old_correct"] / n, r["old_to_current"] / n, r["old_to_other_old"] / n,
-                 r["pred_share_current"], r["true_share_current"])
+                (
+                    r["old_correct"] / n,
+                    r["old_to_current"] / n,
+                    r["old_to_other_old"] / n,
+                    r["pred_share_current"],
+                    r["true_share_current"],
+                )
             )
 
-    print(f"{'profile':14s} {'moment':12s} {'correct':>8s} {'->current':>10s} {'->other old':>12s}   {'pred share cur':>14s} {'true share cur':>14s}")
+    print(
+        f"{'profile':14s} {'moment':12s} {'correct':>8s} {'->current':>10s} {'->other old':>12s}   {'pred share cur':>14s} {'true share cur':>14s}"
+    )
     for profile in sorted(acc):
         for moment in ("first round", "mid-step", "step end"):
             rows = acc[profile].get(moment)
             if not rows:
                 continue
             m = np.mean(np.array(rows, dtype=float), axis=0)
-            print(f"{profile:14s} {moment:12s} {m[0]:8.3f} {m[1]:10.3f} {m[2]:12.3f}   {m[3]:14.3f} {m[4]:14.3f}")
-    print("\nRead: a large '->current' with a small '->other old' means recency bias; a large"
-          "\n'->other old' means the old classes are confused among themselves.")
+            print(
+                f"{profile:14s} {moment:12s} {m[0]:8.3f} {m[1]:10.3f} {m[2]:12.3f}   {m[3]:14.3f} {m[4]:14.3f}"
+            )
+    print(
+        "\nRead: a large '->current' with a small '->other old' means recency bias; a large"
+        "\n'->other old' means the old classes are confused among themselves."
+    )
     return 0
 
 

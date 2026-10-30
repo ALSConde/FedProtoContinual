@@ -89,7 +89,13 @@ def _expansion_term_metrics(**values: Optional[float]) -> dict:
     of all clients, so every client must emit the same keys). A missing value is emitted as
     0.0 with <key>_valid = 0.0; the weighted mean over the clients that have it is then
     mean(<key>) / mean(<key>_valid), because both use the same weights."""
-    names = ("g_cosine_old", "g_cosine_new", "g_entropy", "interference", "expansion_signal")
+    names = (
+        "g_cosine_old",
+        "g_cosine_new",
+        "g_entropy",
+        "interference",
+        "expansion_signal",
+    )
     out: dict = {}
     for name in names:
         value = values.get(name)
@@ -550,7 +556,9 @@ def train(msg: Message, context: Context) -> Message:
             scale=model.classifier.scale.item(),
             device=device,
         )
-        interference = compute_interference(model, train_loader, known_consolidated, device)
+        interference = compute_interference(
+            model, train_loader, known_consolidated, device
+        )
 
         criterion = ExpansionCriterion(
             theta_exp=context.run_config["theta-exp"],
@@ -567,7 +575,11 @@ def train(msg: Message, context: Context) -> Message:
             g_cosine_new=result["g_cosine_new"] if result is not None else None,
             g_entropy=result["g_entropy"] if result is not None else None,
             interference=interference,
-            expansion_signal=signal_value if (result is not None or interference is not None) else None,
+            expansion_signal=(
+                signal_value
+                if (result is not None or interference is not None)
+                else None
+            ),
         )
 
         # With expansion-signal=g the decision only exists when g does (previous behaviour,
@@ -582,7 +594,9 @@ def train(msg: Message, context: Context) -> Message:
                 if _LAST_EXPANSION_ROUND_KEY in context.state
                 else -(10**9)
             )
-            expansion_allowed = cooldown <= 0 or current_round - last_expansion >= cooldown
+            expansion_allowed = (
+                cooldown <= 0 or current_round - last_expansion >= cooldown
+            )
 
             if flags.enable_expansion and expansion_allowed:
                 params_local_before = model.parameter_report()["adapter_local"]
@@ -590,7 +604,9 @@ def train(msg: Message, context: Context) -> Message:
                     model.adapter_local, signal_value, g_reduced_below_threshold=False
                 )
                 if kind is not None:
-                    context.state[_LAST_EXPANSION_ROUND_KEY] = ConfigRecord({"round": current_round})
+                    context.state[_LAST_EXPANSION_ROUND_KEY] = ConfigRecord(
+                        {"round": current_round}
+                    )
                     params_local_after = model.parameter_report()["adapter_local"]
                     print(
                         f"[client {partition_id} expands in {kind} mode "
@@ -655,11 +671,15 @@ def train(msg: Message, context: Context) -> Message:
             "local": float(context.run_config.get("lr-scale-local", 1.0)),
         },
         split_optimizers=flags.split_optimizers,
-        lambda_proto_shared=_inherit(context, "lambda-proto-shared", "lambda-proto", 1.0),
+        lambda_proto_shared=_inherit(
+            context, "lambda-proto-shared", "lambda-proto", 1.0
+        ),
         lambda_proto_local=_inherit(context, "lambda-proto-local", "lambda-proto", 1.0),
         lambda_kd_shared=lambda_kd_shared,
         kd_scale_mode=flags.kd_scale_mode,
         kd_logit_scale=float(context.run_config.get("kd-logit-scale", 1.0)),
+        cls_loss=flags.cls_loss,
+        cls_margin=float(context.run_config.get("cls-margin", 0.2)),
     )
 
     if flags.proto_postpass:
