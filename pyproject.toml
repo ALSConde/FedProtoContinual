@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "FedProtoContinual"
-version = "0.0.5"
+version = "0.0.7"
 description = "Federated Learning With Prototype and Continual Learning"
 license = "Apache-2.0"
 dependencies = [
@@ -109,6 +109,10 @@ kd-scale-mode = "const"
 kd-logit-scale = 1.0
 cls-loss = "ce"
 cls-margin = 0.2
+# cls-loss = ce | triplet | contrastive | ppp | nce ; cls-tau = temperature of ppp/nce
+cls-tau = 0.1
+# kd-mode = kl | embedding_mse | prd | kl+prd ; log-geometry adds geo_* intra/inter-class metrics
+log-geometry = false
 expansion-signal = "g"
 interference-floor = 0.5
 expansion-cooldown = 0

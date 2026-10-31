@@ -12,6 +12,13 @@ from src.utils.losses.Losses import (
     prototype_alignment_loss,
     split_by_know,
 )
+from src.utils.losses.PrototypeLosses import (
+    embedding_geometry,
+    ppp_loss,
+    proto_nce_loss,
+    relation_distillation_loss,
+    valid_prototype_mask,
+)
 
 
 def _device_batches(
@@ -79,7 +86,8 @@ def _class_ce(
     return F.cross_entropy(logits.index_select(1, ids), remap[y])
 
 
-VALID_CLS_LOSSES = ("ce", "triplet", "contrastive")
+VALID_CLS_LOSSES = ("ce", "triplet", "contrastive", "ppp", "nce")
+VALID_KD_MODES = ("kl", "embedding_mse", "prd", "kl+prd")
 
 
 def _prototype_metric_loss(
@@ -135,12 +143,41 @@ def _cls_loss(
     ce_index: Optional[tuple[torch.Tensor, torch.Tensor]],
     cls_loss: str = "ce",
     cls_margin: float = 0.2,
+    cls_tau: float = 0.1,
 ) -> torch.Tensor:
-    """The classification objective: the prototype cross-entropy (default) or a margin loss
-    on the same prototypes."""
+    """The classification objective: the prototype cross-entropy (default), a margin loss
+    on the same prototypes (triplet / contrastive), or one of the batch-aware prototype
+    objectives that handle intra-class compactness and inter-class separation together
+    (ppp = CoPE's pseudo-prototypical proxy loss, nce = FPL-style prototype InfoNCE, see
+    src/utils/losses/PrototypeLosses.py; both use `cls_tau` as temperature)."""
     if cls_loss == "ce":
         return _class_ce(logits, y, ce_index)
+    if cls_loss in ("ppp", "nce"):
+        return _prototype_batch_loss(model, h, y, ce_index, cls_loss, cls_tau)
     return _prototype_metric_loss(model, h, y, ce_index, cls_loss, cls_margin)
+
+
+def _prototype_batch_loss(
+    model: FCLModel,
+    h: torch.Tensor,
+    y: torch.Tensor,
+    ce_index: Optional[tuple[torch.Tensor, torch.Tensor]],
+    kind: str,
+    tau: float,
+) -> torch.Tensor:
+    """ppp / nce on the classifier's prototypes. Scope of the competitors follows
+    ce-local-classes exactly like the CE and the margin losses (ce_index). Falls back to a
+    zero that stays attached to the graph when no term is defined (e.g. all prototypes
+    still zero), so callers can always add/backward it."""
+    protos = model.classifier.prototypes
+    valid = valid_prototype_mask(protos, None if ce_index is None else ce_index[0])
+    if kind == "ppp":
+        loss = ppp_loss(h, y, protos, valid, tau)
+    elif kind == "nce":
+        loss = proto_nce_loss(h, y, protos, valid, tau)
+    else:
+        raise ValueError(f"Unknown batch cls loss '{kind}'.")
+    return (h * 0.0).sum() if loss is None else loss
 
 
 @torch.no_grad()
@@ -211,6 +248,56 @@ def collect_prototype_stats(
         for x, y in _device_batches(loader, device, max_classes=memory.num_classes):
             _, h_shared = model.embed_both(x)
             memory.update(h_shared, y, check_bounds=False)
+    finally:
+        model.train(was_training)
+
+
+@torch.no_grad()
+def prototype_geometry_metrics(
+    model: FCLModel,
+    loader: DataLoader,
+    device: torch.device,
+    known_consolidated: set,
+    prefix: str = "geo_",
+) -> dict[str, float]:
+    """Intra/inter-class diagnostics of the TRAINED client (eval mode, no gradient), on the
+    embedding the classifier actually uses (the personalised one) and on the shared one.
+    Keys: <prefix>{local,shared}_{intra_cos,margin,nn_error,leak_old,leak_old_rate} plus
+    <prefix>proto_cos_{max,mean} (prototype-to-prototype). Empty when there is no
+    prototype yet. `known_consolidated` defines which classes count as "old" for the
+    leak numbers (training data of a Class-IL step has none of them, so any mass of the
+    current samples near an old prototype is interference)."""
+    model.to(device)
+    num_classes = model.classifier.num_classes
+    if num_classes == 0:
+        return {}
+    was_training = model.training
+    model.eval()
+    try:
+        hs_local, hs_shared, ys = [], [], []
+        for x, y in _device_batches(loader, device, max_classes=num_classes):
+            h_l, h_s = model.embed_both(x)
+            hs_local.append(h_l)
+            hs_shared.append(h_s)
+            ys.append(y)
+        if not ys:
+            return {}
+        y_all = torch.cat(ys)
+        protos = model.classifier.prototypes
+        old_ids = (
+            torch.tensor(sorted(known_consolidated), dtype=torch.long, device=device)
+            if known_consolidated
+            else None
+        )
+        out: dict[str, float] = {}
+        for name, hs in (("local", hs_local), ("shared", hs_shared)):
+            geo = embedding_geometry(torch.cat(hs), y_all, protos, old_ids)
+            for key, value in geo.items():
+                if key.startswith("proto_cos"):
+                    out[f"{prefix}{key}"] = value  # same for both views: keep one
+                else:
+                    out[f"{prefix}{name}_{key}"] = value
+        return out
     finally:
         model.train(was_training)
 
@@ -313,8 +400,10 @@ def _kd_term(
     kd_scale_mode: str = "const",
     kd_logit_scale: float = 1.0,
 ) -> Optional[torch.Tensor]:
-    """One KD term. For kd_mode="kl" the logit scale of the similarity distributions is
-    set by kd_scale_mode:
+    """One KD term. kd_mode: "embedding_mse" | "kl" (per-sample distribution over the old
+    prototypes) | "prd" (per-prototype distribution over the batch, PRD) | "kl+prd" (sum).
+    For the similarity-based modes the logit scale of the distributions is set by
+    kd_scale_mode:
       const   teacher and student both use kd_logit_scale (default; with 1.0 this is the
               previous behaviour, with ~20 the distributions match the classifier's);
       local   both use the classifier's own learned scale, detached (strength then varies
@@ -325,9 +414,6 @@ def _kd_term(
     """
     if kd_mode == "embedding_mse":
         return distillation_loss(h, h_teacher)
-    reference = (
-        model.classifier.prototypes[known_sorted] if len(known_sorted) >= 2 else None
-    )
     if kd_scale_mode == "const":
         s_student = s_teacher = kd_logit_scale
     elif kd_scale_mode == "local":
@@ -336,14 +422,44 @@ def _kd_term(
         s_student, s_teacher = model.classifier.scale.detach(), kd_logit_scale
     else:
         raise ValueError(f"Unknown kd_scale_mode '{kd_scale_mode}'.")
-    return distillation_loss_kl(
-        h,
-        h_teacher,
-        reference,
-        temperature=kd_temperature,
-        scale_student=s_student,
-        scale_teacher=s_teacher,
-    )
+    terms = []
+    if kd_mode in ("kl", "kl+prd"):
+        reference = (
+            model.classifier.prototypes[known_sorted]
+            if len(known_sorted) >= 2
+            else None
+        )
+        terms.append(
+            distillation_loss_kl(
+                h,
+                h_teacher,
+                reference,
+                temperature=kd_temperature,
+                scale_student=s_student,
+                scale_teacher=s_teacher,
+            )
+        )
+    if kd_mode in ("prd", "kl+prd"):
+        # PRD needs a single old prototype, unlike the per-sample KL (>= 2)
+        reference = (
+            model.classifier.prototypes[known_sorted]
+            if len(known_sorted) >= 1
+            else None
+        )
+        terms.append(
+            relation_distillation_loss(
+                h,
+                h_teacher,
+                reference,
+                temperature=kd_temperature,
+                scale_student=s_student,
+                scale_teacher=s_teacher,
+            )
+        )
+    terms = [t for t in terms if t is not None]
+    if not terms:
+        return None
+    return sum(terms)
 
 
 def _split_train_step(
@@ -373,6 +489,7 @@ def _split_train_step(
     kd_logit_scale: float = 1.0,
     cls_loss: str = "ce",
     cls_margin: float = 0.2,
+    cls_tau: float = 0.1,
 ) -> Optional[torch.Tensor]:
     """One optimisation step with two disjoint objectives.
 
@@ -405,6 +522,7 @@ def _split_train_step(
         ce_index,
         cls_loss,
         cls_margin,
+        cls_tau,
     )
     lp_g = prototype_alignment_loss(h_g, y, protos, known_consolidated)
     if has_shadow:
@@ -416,6 +534,7 @@ def _split_train_step(
             ce_index,
             cls_loss,
             cls_margin,
+            cls_tau,
         )
         loss_g = 0.5 * (ce_g + ce_with)
         if lambda_mofe > 0.0:
@@ -434,7 +553,7 @@ def _split_train_step(
 
     # ---- local objective ---------------------------------------------------------
     ce_l = _cls_loss(
-        model, h_l, y, model.classifier(h_l), ce_index, cls_loss, cls_margin
+        model, h_l, y, model.classifier(h_l), ce_index, cls_loss, cls_margin, cls_tau
     )
     loss_l = ce_l
     lp_l = prototype_alignment_loss(h_l, y, protos, known_consolidated)
@@ -544,6 +663,7 @@ def train_fn(
     kd_logit_scale: float = 1.0,
     cls_loss: str = "ce",
     cls_margin: float = 0.2,
+    cls_tau: float = 0.1,
 ) -> float:
     """`local_class_ids`: when given, the CE is restricted to those classes (flag
     ce-local-classes). `proto_prepass`: build provisional local prototypes for classes
@@ -555,15 +675,17 @@ def train_fn(
     KD term on the LOCAL embedding and `lambda_kd_shared` the one on the SHARED embedding;
     `lambda_proto_shared/local` default to `lambda_proto`.
     `kd_scale_mode` / `kd_logit_scale`: logit scale of the KL distillation (see _kd_term).
-    `cls_loss` / `cls_margin`: classification objective, "ce" (default) or a margin loss on
-    the prototypes ("triplet" / "contrastive", see _prototype_metric_loss)."""
+    `cls_loss` / `cls_margin` / `cls_tau`: classification objective, "ce" (default), a margin
+    loss on the prototypes ("triplet" / "contrastive", see _prototype_metric_loss) or a
+    batch-aware intra+inter-class objective ("ppp" / "nce" with temperature `cls_tau`, see
+    _prototype_batch_loss). `kd_mode` also accepts "prd" and "kl+prd" (see _kd_term)."""
     if cls_loss not in VALID_CLS_LOSSES:
         raise ValueError(
             f"Unknown cls_loss '{cls_loss}'. Expected one of {VALID_CLS_LOSSES}."
         )
-    if kd_mode not in ("kl", "embedding_mse"):
+    if kd_mode not in VALID_KD_MODES:
         raise ValueError(
-            f"Invalid kd_mode: {kd_mode}. Must be 'kl' or 'embedding_mse'."
+            f"Invalid kd_mode: {kd_mode}. Must be one of {VALID_KD_MODES}."
         )
 
     model.to(device)
@@ -629,6 +751,7 @@ def train_fn(
                     kd_logit_scale=kd_logit_scale,
                     cls_loss=cls_loss,
                     cls_margin=cls_margin,
+                    cls_tau=cls_tau,
                 )
                 if step_loss is not None:
                     running_loss = running_loss + step_loss
@@ -651,7 +774,7 @@ def train_fn(
             optmizer.zero_grad()
 
             logits = model.classifier(h)
-            ce = _cls_loss(model, h, y, logits, ce_index, cls_loss, cls_margin)
+            ce = _cls_loss(model, h, y, logits, ce_index, cls_loss, cls_margin, cls_tau)
 
             l_proto = prototype_alignment_loss(
                 h, y, model.classifier.prototypes, known_consolidated
@@ -669,6 +792,7 @@ def train_fn(
                     ce_index,
                     cls_loss,
                     cls_margin,
+                    cls_tau,
                 )
                 loss = 0.5 * (ce + ce_with)
                 if lambda_mofe > 0.0:

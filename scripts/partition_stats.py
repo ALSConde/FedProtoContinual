@@ -66,13 +66,19 @@ def main() -> None:
     ap.add_argument("--alphas", type=float, nargs="+", required=True)
     ap.add_argument("--seeds", type=int, nargs="+", default=[0])
     ap.add_argument("--out", default=str(ROOT / "outputs" / "partition_stats"))
-    ap.add_argument("--round", type=int, default=1, help="only matters if dirichlet-mode=dynamic")
+    ap.add_argument(
+        "--round", type=int, default=1, help="only matters if dirichlet-mode=dynamic"
+    )
     args = ap.parse_args()
 
     with open(args.config, "rb") as f:
         cfg = tomllib.load(f)["tool"]["flwr"]["app"]["config"]
 
-    root = str(ROOT / cfg["data-root"]) if str(cfg["data-root"]).startswith(".") else str(cfg["data-root"])
+    root = (
+        str(ROOT / cfg["data-root"])
+        if str(cfg["data-root"]).startswith(".")
+        else str(cfg["data-root"])
+    )
     window, stride = int(cfg["window-size"]), int(cfg["stride"])
     held_out = parse_int_list_config(cfg.get("server-eval-subjects"))
     num_classes = int(cfg["num-classes-total"])
@@ -132,14 +138,31 @@ def main() -> None:
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    cols = ["alpha", "seed", "client", "n_train", "n_val", "n_classes",
-            "entropy_nats", "entropy_norm", "jsd_vs_global", "global_covered"]
+    cols = [
+        "alpha",
+        "seed",
+        "client",
+        "n_train",
+        "n_val",
+        "n_classes",
+        "entropy_nats",
+        "entropy_norm",
+        "jsd_vs_global",
+        "global_covered",
+    ]
     with open(out / "per_client.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         w.writerows(rows)
 
-    metrics = ["n_train", "n_val", "n_classes", "entropy_norm", "jsd_vs_global", "global_covered"]
+    metrics = [
+        "n_train",
+        "n_val",
+        "n_classes",
+        "entropy_norm",
+        "jsd_vs_global",
+        "global_covered",
+    ]
     summary = []
     for alpha in args.alphas:
         sel = [r for r in rows if r["alpha"] == alpha]
@@ -159,8 +182,10 @@ def main() -> None:
         w.writeheader()
         w.writerows(summary)
 
-    print(f"{'alpha':>8} {'n_train':>14} {'n_classes':>12} {'H_norm':>12} {'JSD':>12} "
-          f"{'cover(min)':>10} {'min tr/val':>11}")
+    print(
+        f"{'alpha':>8} {'n_train':>14} {'n_classes':>12} {'H_norm':>12} {'JSD':>12} "
+        f"{'cover(min)':>10} {'min tr/val':>11}"
+    )
     for r in summary:
         print(
             f"{r['alpha']:>8g} "

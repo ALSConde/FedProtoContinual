@@ -21,10 +21,11 @@ from src.model.Models import FCLModel
 from src.model.blocks.Adapter import Adapter, adapter_topology, promote_to_incorporated
 from src.model.layers.WDStats import WDStats
 from src.model.layers.PrototypeMemory import PrototypeMemory
-from src.utils.ablation import AblationFlags, resolve_ablation_flags
+from src.utils.ablation import AblationFlags, as_bool, resolve_ablation_flags
 from .ClientTask import (
     collect_prototype_stats,
     compute_local_contribution_ratio,
+    prototype_geometry_metrics,
     train_fn,
     test_fn,
     compute_expansion_signal,
@@ -680,7 +681,15 @@ def train(msg: Message, context: Context) -> Message:
         kd_logit_scale=float(context.run_config.get("kd-logit-scale", 1.0)),
         cls_loss=flags.cls_loss,
         cls_margin=float(context.run_config.get("cls-margin", 0.2)),
+        cls_tau=float(context.run_config.get("cls-tau", 0.1)),
     )
+
+    geometry_metrics: dict = {}
+    if as_bool(context.run_config.get("log-geometry", False), "log-geometry"):
+        # intra/inter-class diagnostics of the trained client (eval mode, no gradient)
+        geometry_metrics = prototype_geometry_metrics(
+            model, train_loader, device, known_consolidated
+        )
 
     if flags.proto_postpass:
         # Statistics of the trained model (eval mode) replace the ones accumulated while
@@ -729,6 +738,7 @@ def train(msg: Message, context: Context) -> Message:
             "expanded_depth": expanded_depth,
             "expansion_g": expansion_g,
             **term_metrics,
+            **geometry_metrics,
             "alpha_mean": alpha_mean,
             # local, learned per client (never aggregated): logged to see how far it drifts from 20
             "classifier_scale": float(model.classifier.scale.detach()),

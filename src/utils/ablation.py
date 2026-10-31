@@ -63,7 +63,13 @@ VALID_FL_ALGORITHMS = ("fedavg", "fedprox")
 VALID_KD_ON = ("local", "shared", "both")
 VALID_KD_SCALE_MODES = ("const", "local", "hybrid")
 VALID_EXPANSION_SIGNALS = ("g", "interference", "combined")
-VALID_CLS_LOSSES = ("ce", "triplet", "contrastive")
+VALID_CLS_LOSSES = (
+    "ce",
+    "triplet",
+    "contrastive",
+    "ppp",
+    "nce",
+)  # keep in sync with ClientTask
 
 _TRUE = {"true", "1", "yes", "on"}
 _FALSE = {"false", "0", "no", "off"}
