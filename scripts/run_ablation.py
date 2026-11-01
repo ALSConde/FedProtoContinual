@@ -22,6 +22,13 @@ central     CENTRAL (upper bound: ONE client holding the whole pool, partition-m
             the union of the subject clients' retained data, partition-mode=subject-union).
             Both: min-nodes=1, expected-nodes=1.
             Needs simulation.num-supernodes = 1 (see below), so it is NOT part of 'all'.
+loss        classification-loss x distillation factorial on top of A2_kd (local adapter + KD,
+            no expansion/incorporation): {ce, ppp} x {kl, prd}, plus the exploratory
+            L_ppp_prd_learn (learnable old prototypes). Screening suite: few moving parts,
+            so the loss effect is not mixed with when the expansions fire.
+loss-full   the same cells on top of A4_full (LF_* profiles): confirmation, with fresh seeds.
+            The expansion thresholds were tuned with the CE: compare the expansion counts
+            (expanded_width / expanded_depth) before attributing a gap to the loss.
 all         ladder + loo + algorithm.
 
 Centralized baseline (suite 'central')
@@ -51,6 +58,8 @@ Usage
     python scripts/run_ablation.py --suite algorithm --seeds 100-102 --mu 0.001,0.01,0.1 \
         --results-dir outputs/tuning
     python scripts/run_ablation.py --report outputs/ablation --suite ladder
+    python scripts/run_ablation.py --suite loss --seeds 101-105 --results-dir outputs/loss_screen
+    python scripts/run_ablation.py --report outputs/loss_screen --suite loss
 
 Seeds: tune hyperparameters (and FedProx mu) on separate seeds (e.g. 100-102) and keep
 0-9 for the final numbers. Pass tuned values to every profile with --fixed so that all
@@ -116,6 +125,30 @@ LADDER: dict[str, dict[str, Any]] = {
 }
 
 FULL = LADDER["A4_full"]
+
+# Loss factorial: {CE, PPP} x {KL, PRD}. log-geometry is on everywhere so that the intra/inter
+# class diagnostics (geo_*) exist for every cell (constant key set across clients).
+_LOSS_CELLS: dict[str, dict[str, Any]] = {
+    "ce_kl": {"cls-loss": "ce", "kd-mode": "kl"},
+    "ppp_kl": {"cls-loss": "ppp", "kd-mode": "kl"},
+    "ce_prd": {"cls-loss": "ce", "kd-mode": "prd"},
+    "ppp_prd": {"cls-loss": "ppp", "kd-mode": "prd"},
+    # exploratory (not part of the factorial): old prototypes learned by the PRD and
+    # folded into the global ones by the server EMA
+    "ppp_prd_learn": {"cls-loss": "ppp", "kd-mode": "prd", "prd-learn-protos": True},
+}
+
+
+def loss_profiles(base: dict[str, Any], prefix: str) -> dict[str, dict[str, Any]]:
+    return {
+        f"{prefix}_{cell}": {**base, **flags, "log-geometry": True}
+        for cell, flags in _LOSS_CELLS.items()
+    }
+
+
+LOSS = loss_profiles(LADDER["A2_kd"], "L")
+LOSS_FULL = loss_profiles(LADDER["A4_full"], "LF")
+
 LOO: dict[str, dict[str, Any]] = {
     "LOO_noKD": {**FULL, "enable-kd": False},
     "LOO_noExp": {**FULL, "enable-expansion": False},
@@ -168,6 +201,10 @@ def build_suite(name: str, mus: list[float]) -> dict[str, dict[str, Any]]:
         return {"A4_full": LADDER["A4_full"], **LOO}
     if name == "algorithm":
         return algorithm_profiles(mus)
+    if name == "loss":
+        return dict(LOSS)
+    if name == "loss-full":
+        return dict(LOSS_FULL)
     if name == "all":
         return {**LADDER, **LOO, **algorithm_profiles(mus)}
     raise ValueError(f"unknown suite {name!r}")
@@ -184,6 +221,18 @@ def default_pairs(profiles: list[str]) -> list[tuple[str, str]]:
         pairs += [(p, "A4_full") for p in profiles if p.startswith("LOO_")]
     if "A4_full" in profiles:
         pairs += [(p, "A4_full") for p in profiles if p.startswith("ALG_fedprox")]
+    for prefix in ("L", "LF"):
+        cell = lambda c: f"{prefix}_{c}"
+        for treat, ref in (
+            ("ppp_prd", "ce_kl"),  # primary: the combination against the baseline
+            ("ppp_kl", "ce_kl"),  # PPP alone
+            ("ce_prd", "ce_kl"),  # PRD alone
+            ("ppp_prd", "ppp_kl"),  # PRD on top of PPP
+            ("ppp_prd", "ce_prd"),  # PPP on top of PRD
+            ("ppp_prd_learn", "ppp_prd"),  # exploratory: learnable old prototypes
+        ):
+            if cell(treat) in profiles and cell(ref) in profiles:
+                pairs.append((cell(treat), cell(ref)))
     return pairs
 
 
@@ -462,8 +511,10 @@ def report(args) -> None:
 
     metrics = [m.strip() for m in args.metrics.split(",")]
     profiles = list(data)
-    order = [p for p in [*LADDER, *LOO] if p in profiles] + [
-        p for p in profiles if p not in LADDER and p not in LOO
+    order = [p for p in [*LADDER, *LOO, *LOSS, *LOSS_FULL] if p in profiles] + [
+        p
+        for p in profiles
+        if p not in LADDER and p not in LOO and p not in LOSS and p not in LOSS_FULL
     ]
 
     if args.pairs:
@@ -553,7 +604,7 @@ def main() -> None:
     )
     p.add_argument(
         "--suite",
-        choices=["ladder", "loo", "algorithm", "central", "all"],
+        choices=["ladder", "loo", "algorithm", "central", "loss", "loss-full", "all"],
         default="ladder",
         help="Profiles to run (or, with --report, to include). Default: ladder.",
     )
