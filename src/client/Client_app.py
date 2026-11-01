@@ -646,6 +646,11 @@ def train(msg: Message, context: Context) -> Message:
         if flags.kd_on == "shared":
             lambda_kd = 0.0
 
+    prd_learn_protos = as_bool(
+        context.run_config.get("prd-learn-protos", False), "prd-learn-protos"
+    )
+    prd_proto_lr = context.run_config.get("prd-proto-lr")
+    prd_out: dict = {}  # filled by train_fn with the learned old prototypes
     train_loss = train_fn(
         model,
         train_loader,
@@ -682,6 +687,9 @@ def train(msg: Message, context: Context) -> Message:
         cls_loss=flags.cls_loss,
         cls_margin=float(context.run_config.get("cls-margin", 0.2)),
         cls_tau=float(context.run_config.get("cls-tau", 0.1)),
+        prd_learn_protos=prd_learn_protos,
+        prd_proto_lr=None if prd_proto_lr is None else float(prd_proto_lr),
+        prd_out=prd_out,
     )
 
     geometry_metrics: dict = {}
@@ -702,6 +710,18 @@ def train(msg: Message, context: Context) -> Message:
     _save_local_state(context, model, known_consolidated)
 
     config_reply_data = {"proto_stats": pickle.dumps((sum_h, counts, class_ids))}
+    prd_metrics: dict = {}
+    if prd_learn_protos:
+        if prd_out:
+            # learned prototypes of the OLD classes: the server folds them in by EMA
+            config_reply_data["old_proto_update"] = pickle.dumps(
+                (prd_out["class_ids"], prd_out["prototypes"], prd_out["num_samples"])
+            )
+        # constant key set across clients (Flower skips aggregation otherwise)
+        prd_metrics = {
+            "prd_old_classes": float(len(prd_out["class_ids"])) if prd_out else 0.0,
+            "prd_proto_drift": float(prd_out["drift"]) if prd_out else 0.0,
+        }
 
     alpha_mean = model.alpha_gate.mean_alpha() if flags.use_local_adapter else 0.0
     contribution_ratio = (
@@ -739,6 +759,7 @@ def train(msg: Message, context: Context) -> Message:
             "expansion_g": expansion_g,
             **term_metrics,
             **geometry_metrics,
+            **prd_metrics,
             "alpha_mean": alpha_mean,
             # local, learned per client (never aggregated): logged to see how far it drifts from 20
             "classifier_scale": float(model.classifier.scale.detach()),

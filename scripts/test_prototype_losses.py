@@ -247,25 +247,128 @@ def test_relation_distillation():
     torch.manual_seed(0)
     protos = torch.randn(3, 8)
     h = torch.randn(10, 8)
-    same = relation_distillation_loss(h, h.clone(), protos, 2.0, 5.0)
+    same = relation_distillation_loss(
+        h, h.clone(), protos, temperature=2.0, scale_student=5.0
+    )
     assert abs(float(same)) < 1e-6
     student = (h + 0.5 * torch.randn_like(h)).requires_grad_(True)
     teacher = h.clone()
-    loss = relation_distillation_loss(student, teacher, protos, 2.0, 5.0)
+    loss = relation_distillation_loss(
+        student, teacher, protos, temperature=2.0, scale_student=5.0
+    )
     assert float(loss) > 0
     loss.backward()
     assert student.grad is not None and float(student.grad.abs().sum()) > 0
+    # direction: must be KL(student || teacher) as in the PRD paper (Eq. 6), not the reverse
+    hs = student.detach()
+    q_s = F.softmax(
+        F.normalize(hs, dim=1) @ F.normalize(protos, dim=1).t() * (5.0 / 2.0), dim=0
+    )
+    q_t = F.softmax(
+        F.normalize(teacher, dim=1) @ F.normalize(protos, dim=1).t() * (5.0 / 2.0),
+        dim=0,
+    )
+    kl_st = (q_s * (q_s.log() - q_t.log())).sum() * 4.0  # student || teacher
+    kl_ts = (q_t * (q_t.log() - q_s.log())).sum() * 4.0  # teacher || student
+    got = float(
+        relation_distillation_loss(
+            hs, teacher, protos, temperature=2.0, scale_student=5.0
+        )
+    )
+    assert abs(got - float(kl_st)) < 1e-5, (got, float(kl_st))
+    assert abs(float(kl_st) - float(kl_ts)) > 1e-4  # the two directions really differ
+    assert abs(got - float(kl_ts)) > 1e-4
+    # summed over prototypes (paper Eq. 6): duplicating the prototype set doubles the loss
+    one = float(
+        relation_distillation_loss(
+            hs, teacher, protos, temperature=2.0, scale_student=5.0
+        )
+    )
+    two = float(
+        relation_distillation_loss(
+            hs, teacher, torch.cat([protos, protos]), temperature=2.0, scale_student=5.0
+        )
+    )
+    assert abs(two - 2 * one) < 1e-5, (one, two)
     # a global rotation of the student around ALL prototypes' relations: scaling h is a no-op
-    assert abs(float(relation_distillation_loss(3.0 * h, h, protos, 2.0, 5.0))) < 1e-6
+    assert (
+        abs(
+            float(
+                relation_distillation_loss(
+                    3.0 * h, h, protos, temperature=2.0, scale_student=5.0
+                )
+            )
+        )
+        < 1e-6
+    )
     # ordering sensitivity: swapping two samples' embeddings changes the loss
     swapped = h.clone()
     swapped[[0, 1]] = swapped[[1, 0]]
-    assert float(relation_distillation_loss(swapped, h, protos, 2.0, 5.0)) > 0
+    assert (
+        float(
+            relation_distillation_loss(
+                swapped, h, protos, temperature=2.0, scale_student=5.0
+            )
+        )
+        > 0
+    )
+    # ---- two prototype sets (paper: P^t_k for the student, P^{t-1}_k for the teacher) ----
+    p_prev = protos.clone()
+    p_now = (protos + 0.4 * torch.randn_like(protos)).requires_grad_(
+        True
+    )  # moved since t-1
+    f_now = (h + 0.2 * torch.randn_like(h)).requires_grad_(True)
+    f_prev = h.clone()
+    got2 = relation_distillation_loss(f_now, f_prev, p_now, p_prev, 2.0, 5.0)
+    nrm = lambda t: F.normalize(t, dim=1)
+    q_s2 = F.softmax(
+        nrm(f_now.detach()) @ nrm(p_now.detach()).t() * 2.5, dim=0
+    )  # P_t(k)
+    q_t2 = F.softmax(nrm(f_prev) @ nrm(p_prev).t() * 2.5, dim=0)  # P_{t-1}(k)
+    manual = (q_s2 * (q_s2.log() - q_t2.log())).sum() * 4.0
+    assert abs(float(got2) - float(manual)) < 1e-5, (float(got2), float(manual))
+    # using P^t for the teacher too (the old single-set behaviour) gives a different value
+    same_set = relation_distillation_loss(f_now, f_prev, p_now, None, 2.0, 5.0)
+    assert abs(float(got2) - float(same_set)) > 1e-4
+    # None == passing the same (detached) set explicitly
+    explicit = relation_distillation_loss(
+        f_now, f_prev, p_now, p_now.detach(), 2.0, 5.0
+    )
+    assert torch.allclose(same_set, explicit)
+    # gradient reaches the student's prototypes (the paper's "old prototypes follow f") ...
+    got2.backward()
+    assert p_now.grad is not None and float(p_now.grad.abs().sum()) > 0
+    # ... and never the teacher's
+    p_prev_g = p_prev.clone().requires_grad_(True)
+    relation_distillation_loss(f_now.detach(), f_prev, protos, p_prev_g, 2.0, 5.0)
+    assert p_prev_g.grad is None
+    try:
+        relation_distillation_loss(f_now, f_prev, p_now, p_prev[:2], 2.0, 5.0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("mismatched prototype sets must raise")
+    # a learnable student prototype can absorb the drift: moving P^t towards where the
+    # teacher's relations are lowers the loss (this is what constants cannot do)
+    free = p_prev.clone().requires_grad_(True)
+    drifted = (h + 1.0 * torch.randn_like(h)).detach()
+    base = float(
+        relation_distillation_loss(drifted, h, free.detach(), p_prev, 2.0, 5.0)
+    )
+    opt = torch.optim.SGD([free], lr=0.5)
+    for _ in range(30):
+        opt.zero_grad()
+        relation_distillation_loss(drifted, h, free, p_prev, 2.0, 5.0).backward()
+        opt.step()
+    assert float(relation_distillation_loss(drifted, h, free, p_prev, 2.0, 5.0)) < base
     assert relation_distillation_loss(h[:1], h[:1], protos) is None
     assert relation_distillation_loss(h, h, None) is None
     # a single old prototype is enough for PRD (the per-sample KL needs >= 2)
     assert (
-        relation_distillation_loss(student, teacher, protos[:1], 2.0, 5.0) is not None
+        relation_distillation_loss(
+            student, teacher, protos[:1], temperature=2.0, scale_student=5.0
+        )
+        is not None
     )
     print("relation distillation OK")
 
@@ -402,6 +505,34 @@ def test_kd_term_prd_modes():
     assert _kd_term(model, h, h_t, [], "prd", **kw) is None  # no old prototype
     assert _kd_term(model, h, h_t, [0], "kl", **kw) is None  # KL needs >= 2
     assert _kd_term(model, h, h_t, [0], "prd", **kw) is not None  # PRD needs only 1
+    # explicit P^t / P^{t-1}: default (None) == student set reused as teacher set
+    ref = model.classifier.prototypes[[0, 1, 2]]
+    d0 = _kd_term(model, h, h_t, [0, 1, 2], "prd", **kw)
+    d1 = _kd_term(
+        model,
+        h,
+        h_t,
+        [0, 1, 2],
+        "prd",
+        prd_prototypes_student=ref,
+        prd_prototypes_teacher=ref.clone(),
+        **kw,
+    )
+    assert torch.allclose(d0, d1)
+    moved = (ref + 0.3 * torch.randn_like(ref)).requires_grad_(True)
+    d2 = _kd_term(
+        model,
+        h,
+        h_t,
+        [0, 1, 2],
+        "prd",
+        prd_prototypes_student=moved,
+        prd_prototypes_teacher=ref,
+        **kw,
+    )
+    assert abs(float(d2) - float(d0)) > 1e-5
+    d2.backward()
+    assert moved.grad is not None
     print("kd modes OK")
 
 
@@ -419,7 +550,11 @@ def test_geometry_metrics_hook():
     ):
         assert key in out and math.isfinite(out[key]), (key, out)
     fresh = FCLModel(input_dim=CHANNELS, hidden_dim=HIDDEN)  # no classes yet
-    assert prototype_geometry_metrics(fresh, loader, DEVICE, set()) == {}
+    empty = prototype_geometry_metrics(fresh, loader, DEVICE, set())
+    assert empty["geo_defined"] == 0.0 and all(v == 0.0 for v in empty.values())
+    # constant key set: Flower skips aggregation when clients' metric keys differ
+    assert set(empty) == set(out), set(empty) ^ set(out)
+    assert out["geo_defined"] == 1.0
     # the hook must leave train/eval mode as it found it
     model.train()
     prototype_geometry_metrics(model, _loader([3, 4]), DEVICE, set())

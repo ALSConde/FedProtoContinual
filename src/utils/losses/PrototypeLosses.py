@@ -183,19 +183,34 @@ def proto_nce_loss(
 def relation_distillation_loss(
     h_student: torch.Tensor,
     h_teacher: torch.Tensor,
-    reference_prototypes: Optional[torch.Tensor],
+    prototypes_student: Optional[torch.Tensor],
+    prototypes_teacher: Optional[torch.Tensor] = None,
     temperature: float = 2.0,
     scale_student: Union[float, torch.Tensor] = 1.0,
     scale_teacher: Optional[Union[float, torch.Tensor]] = None,
 ) -> Optional[torch.Tensor]:
     """Prototype-sample relation distillation (PRD, Eq. 5-6).
 
-    For each reference (old) prototype p_k the similarities to the B samples of the batch
-    are turned into a distribution OVER THE BATCH, q(k)_i = softmax_i(s * cos(p_k, f_i) / T);
-    the student's q must match the teacher's. Contrast with `distillation_loss_kl`, which
+    Two prototype sets, as in the paper's notation, row k of both referring to the SAME class:
+      prototypes_student   P^t_k      current prototypes, paired with the current model f_t;
+      prototypes_teacher   P^{t-1}_k  prototypes frozen at the end of the previous task,
+                                      paired with the previous model f_{t-1}.
+    For each old class k the similarities to the B samples of the batch are turned into a
+    distribution OVER THE BATCH,
+        P_t(k)_i     = softmax_i( s * cos(P^t_k,     f_t(x_i))     / T )
+        P_{t-1}(k)_i = softmax_i( s * cos(P^{t-1}_k, f_{t-1}(x_i)) / T )
+    and the student's must match the teacher's. Contrast with `distillation_loss_kl`, which
     builds a distribution over PROTOTYPES for each sample: PRD preserves the relative
     ordering of the samples around every old prototype, so old prototypes stay in a
     consistent place of the moving embedding space.
+
+    `prototypes_teacher=None` reuses the student's prototypes (detached) for the teacher: the
+    case where the prototypes did not move between t-1 and t, e.g. the FPC client, whose
+    prototypes are constants received from the server. In the paper the old prototypes are
+    learned parameters that this very loss updates (it is how they follow the representation),
+    so there P^t_k != P^{t-1}_k after the first step; here that happens whenever
+    `prototypes_student` carries gradient (requires_grad), which flows back to it. The teacher
+    side never receives gradient.
 
     Direction: KL(student || teacher) = sum_i q_s(i) [log q_s(i) - log q_t(i)], exactly as in
     the paper (Eq. 6, KL(P_t(k) || P_{t-1}(k)) with t the current model and t-1 the
@@ -204,18 +219,28 @@ def relation_distillation_loss(
     puts mass on samples the teacher considers far from the prototype. SUMMED over the old
     prototypes, as in Eq. 6 of the paper, and scaled by T^2 like the other KD term (the
     paper has no T^2). Because of the sum the magnitude grows with the number of old
-    prototypes, so lambda-kd needs to be tuned accordingly. The prototypes are constants
-    here (server state), as in the rest of the client.
+    prototypes, so lambda-kd needs to be tuned accordingly.
     """
-    if reference_prototypes is None or reference_prototypes.shape[0] < 1:
+    if prototypes_student is None or prototypes_student.shape[0] < 1:
         return None
     if h_student.size(0) < 2:
         return None  # a softmax over one sample carries no relation
+    if prototypes_teacher is None:
+        prototypes_teacher = prototypes_student.detach()
+    elif prototypes_teacher.shape != prototypes_student.shape:
+        raise ValueError(
+            "prototypes_student and prototypes_teacher must hold the same classes in the "
+            f"same order, got {tuple(prototypes_student.shape)} vs "
+            f"{tuple(prototypes_teacher.shape)}."
+        )
+    else:
+        prototypes_teacher = prototypes_teacher.detach()
     if scale_teacher is None:
         scale_teacher = scale_student
-    p_n = F.normalize(reference_prototypes, dim=1)
-    sim_s = (F.normalize(h_student, dim=1) @ p_n.t()) * (scale_student / temperature)
-    sim_t = (F.normalize(h_teacher, dim=1) @ p_n.t()) * (scale_teacher / temperature)
+    p_s = F.normalize(prototypes_student, dim=1)  # P^t_k
+    p_t = F.normalize(prototypes_teacher, dim=1)  # P^{t-1}_k
+    sim_s = (F.normalize(h_student, dim=1) @ p_s.t()) * (scale_student / temperature)
+    sim_t = (F.normalize(h_teacher, dim=1) @ p_t.t()) * (scale_teacher / temperature)
     log_q_s = F.log_softmax(sim_s, dim=0)  # normalise over the batch, per prototype
     log_q_t = F.log_softmax(sim_t, dim=0)
     # KL(student || teacher): F.kl_div(input, target) = target * (log target - input)

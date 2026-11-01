@@ -113,6 +113,10 @@ cls-margin = 0.2
 cls-tau = 0.1
 # kd-mode = kl | embedding_mse | prd | kl+prd ; log-geometry adds geo_* intra/inter-class metrics
 log-geometry = false
+# prd-learn-protos: old-class prototypes become learnable (kd-mode must be prd or kl+prd) and are
+# folded into the global ones by EMA. Optional keys: prd-proto-lr (default = round lr),
+# prd-proto-tau (EMA scale of the old classes, default = tau)
+prd-learn-protos = false
 expansion-signal = "g"
 interference-floor = 0.5
 expansion-cooldown = 0

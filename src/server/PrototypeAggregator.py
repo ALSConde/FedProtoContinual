@@ -1,5 +1,28 @@
+import pickle
+from typing import Iterable, Optional
+
 import torch
 import torch.nn.functional as F
+
+
+def collect_old_proto_updates(
+    replies: Iterable,
+) -> list[tuple[torch.Tensor, torch.Tensor, int]]:
+    """Old-prototype updates (class_ids, learned prototypes, num_samples) that the clients
+    attached to their train reply (key 'old_proto_update' of the 'config' record, written
+    by the client when the PRD prototypes are learnable). Replies without it are skipped.
+    """
+    updates = []
+    for reply in replies:
+        if not reply.has_content():
+            continue
+        config_record = reply.content.get("config")
+        if config_record is None or "old_proto_update" not in config_record:
+            continue
+        ids, protos, n = pickle.loads(config_record["old_proto_update"])
+        if len(ids) > 0:
+            updates.append((ids, protos, int(n)))
+    return updates
 
 
 class PrototypeAggregator:
@@ -25,6 +48,11 @@ class PrototypeAggregator:
     the τ (tau) controls the scale of confidence — should be calibrated as
     a fraction of the expected number of samples per class per aggregated round.
     As a general rule: τ ≈ (total_samples_per_round / num_classes).
+
+    OLD classes (no samples this round) are updated by `aggregate_old`, from the prototypes
+    the clients learned through the PRD term (see ClientTask.OldPrototypeState): same EMA
+    form, with the evidence N_k = number of samples that drove the distillation and its own
+    scale τ_old.
     """
 
     def __init__(
@@ -32,6 +60,7 @@ class PrototypeAggregator:
         embedding_dim: int,
         num_classes: int = 0,
         tau: float = 100.0,
+        old_tau: Optional[float] = None,
     ):
         """
         Args:
@@ -39,10 +68,17 @@ class PrototypeAggregator:
             num_classes:    initial number of classes (can be 0 for pure growth)
             tau:            scale of confidence for the adaptive EMA
                             τ ≈ expected number of samples per class per aggregated round
+            old_tau:        scale of the EMA of `aggregate_old` (default: `tau`). Its
+                            evidence counts the client samples used as proxy for the old
+                            classes, which is much larger than a per-class count, so a
+                            larger value than `tau` damps the drift of old prototypes
         """
         self.embedding_dim = embedding_dim
         self.num_classes = num_classes
         self.tau = tau
+        self.old_tau = float(tau if old_tau is None else old_tau)
+        if self.old_tau <= 0:
+            raise ValueError(f"old_tau must be > 0 (got {self.old_tau}).")
 
         self.mu_global: torch.Tensor = torch.zeros(num_classes, embedding_dim)
 
@@ -146,6 +182,52 @@ class PrototypeAggregator:
             class_ids = self.initialized.nonzero(as_tuple=False).squeeze(1)
 
         return self.mu_global[class_ids].clone(), class_ids
+
+    def aggregate_old(
+        self,
+        old_updates: list[tuple[torch.Tensor, torch.Tensor, int]],
+    ) -> torch.Tensor:
+        """EMA update of OLD classes, which `aggregate` cannot touch (no samples).
+
+        Args:
+            old_updates: per client (class_ids (K,), prototypes (K, d), num_samples):
+                         the prototypes the client learned for classes absent from its data,
+                         in the raw space of `mu_global` (the client restores the norm),
+                         and the number of local training samples that drove the PRD term.
+
+        For each class k reported by at least one client:
+            p̄_k = Σ_c n_c p̃_{k,c} / Σ_c n_c         (weighted by the client evidence)
+            N_k = Σ_c n_c
+            α_k = 1 - exp(-N_k / τ_old)
+            μ_k ← (1 - α_k) μ_k + α_k p̄_k
+        Classes the server has never initialised (or beyond the current class count) are
+        ignored: there is nothing to follow. Call it after `aggregate`, so a class that is new
+        for some clients and old for others gets both updates in that order.
+
+        Returns the ids of the updated classes.
+        """
+        sum_p = torch.zeros(self.num_classes, self.embedding_dim)
+        total_n = torch.zeros(self.num_classes)
+        for ids, protos, n in old_updates:
+            ids = torch.as_tensor(ids, dtype=torch.long)
+            protos = torch.as_tensor(protos, dtype=torch.float32)
+            if len(ids) == 0 or n <= 0:
+                continue
+            in_range = ids < self.num_classes
+            ids, protos = ids[in_range], protos[in_range]
+            known = self.initialized[ids]
+            ids, protos = ids[known], protos[known]
+            sum_p[ids] += float(n) * protos
+            total_n[ids] += float(n)
+        updated = (total_n > 0).nonzero(as_tuple=False).squeeze(1)
+        if len(updated) == 0:
+            return updated
+        p_bar = sum_p[updated] / total_n[updated].unsqueeze(1)
+        alpha = (1.0 - torch.exp(-total_n[updated] / self.old_tau)).unsqueeze(1)
+        self.mu_global[updated] = (1.0 - alpha) * self.mu_global[
+            updated
+        ] + alpha * p_bar
+        return updated
 
     # ------------------------------------------------------------------
     # Growth management

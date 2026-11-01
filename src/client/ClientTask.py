@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Callable, Mapping, Optional, Sequence, Union
 import torch
 from torch.utils.data import TensorDataset, random_split, DataLoader
@@ -263,10 +264,37 @@ def prototype_geometry_metrics(
     """Intra/inter-class diagnostics of the TRAINED client (eval mode, no gradient), on the
     embedding the classifier actually uses (the personalised one) and on the shared one.
     Keys: <prefix>{local,shared}_{intra_cos,margin,nn_error,leak_old,leak_old_rate} plus
-    <prefix>proto_cos_{max,mean} (prototype-to-prototype). Empty when there is no
-    prototype yet. `known_consolidated` defines which classes count as "old" for the
-    leak numbers (training data of a Class-IL step has none of them, so any mass of the
-    current samples near an old prototype is interference)."""
+    <prefix>proto_cos_{max,mean} (prototype-to-prototype) and <prefix>defined (1.0 when the
+    sample-level numbers could be computed, else 0.0). The key set is ALWAYS the same: Flower
+    skips the whole aggregation of a round when the clients' MetricRecords have different
+    keys, so a number that is undefined for one client (no prototype yet, no old class...)
+    is reported as 0.0 and `defined` tells how many clients really measured it (the
+    federated mean of a number mixes those zeros: read it together with `defined`).
+    `known_consolidated` defines which classes count as "old" for the leak numbers (training
+    data of a Class-IL step has none of them, so any mass of the current samples near an old
+    prototype is interference)."""
+    keys = [
+        f"{prefix}{view}_{name}"
+        for view in ("local", "shared")
+        for name in ("intra_cos", "margin", "nn_error", "leak_old", "leak_old_rate")
+    ] + [f"{prefix}proto_cos_max", f"{prefix}proto_cos_mean"]
+    zeros = {key: 0.0 for key in keys}
+    zeros[f"{prefix}defined"] = 0.0
+    measured = _prototype_geometry(model, loader, device, known_consolidated, prefix)
+    zeros.update(measured)
+    if f"{prefix}local_intra_cos" in measured:
+        zeros[f"{prefix}defined"] = 1.0
+    return zeros
+
+
+@torch.no_grad()
+def _prototype_geometry(
+    model: FCLModel,
+    loader: DataLoader,
+    device: torch.device,
+    known_consolidated: set,
+    prefix: str,
+) -> dict[str, float]:
     model.to(device)
     num_classes = model.classifier.num_classes
     if num_classes == 0:
@@ -390,6 +418,94 @@ def _logits_frozen_scale(classifier, h: torch.Tensor) -> torch.Tensor:
     )
 
 
+@dataclass
+class OldPrototypeState:
+    """Learnable copy of the prototypes of the OLD classes for the PRD term (paper: P^t_k).
+
+    In PRD the prototypes of past classes are parameters that the relation-distillation loss
+    itself updates, so they follow the moving representation; P^{t-1}_k is the frozen snapshot
+    taken before training. The FPC client otherwise treats prototypes as server constants
+    (P^t == P^{t-1}), which can only stabilise the embedding. `student` is trained locally
+    and exported to the server (see `export_old_prototypes`), which folds it into the global
+    prototypes with an EMA (PrototypeAggregator.aggregate_old).
+
+    "Old" = known (consolidated) classes that are absent from the client's training labels:
+    samples of a present class are tied to its prototype by the CE / L_proto terms, as in the
+    paper where P_o holds only the classes of previous tasks.
+    """
+
+    class_ids: list
+    student: torch.nn.Parameter  # (K, d) P^t, trained
+    teacher: torch.Tensor  # (K, d) P^{t-1}, frozen snapshot
+    init_norm: torch.Tensor  # (K,) norm of the received prototypes
+
+
+def _local_label_set(
+    loader: DataLoader, local_class_ids: Optional[Sequence[int]]
+) -> set:
+    """Labels present in the client's training data (reuses `local_class_ids` if given)."""
+    if local_class_ids is not None:
+        return {int(c) for c in local_class_ids}
+    labels: set = set()
+    for batch in loader:
+        labels.update(int(c) for c in batch[1].unique().tolist())
+    return labels
+
+
+def make_old_prototype_state(
+    model: FCLModel, known_sorted: Sequence[int], local_labels: set
+) -> OldPrototypeState:
+    protos = model.classifier.prototypes
+    ids = [
+        c
+        for c in known_sorted
+        if c not in local_labels and c < protos.shape[0] and float(protos[c].norm()) > 0
+    ]
+    init = protos[ids].detach().clone()
+    return OldPrototypeState(
+        class_ids=ids,
+        student=torch.nn.Parameter(init.clone()),
+        teacher=init,
+        init_norm=init.norm(dim=1),
+    )
+
+
+@torch.no_grad()
+def export_old_prototypes(
+    state: OldPrototypeState,
+) -> tuple[torch.Tensor, torch.Tensor, float]:
+    """(class ids, learned prototypes, drift). The learned vectors are rescaled to the norm
+    of the received ones: the loss only sees cosines, so the norm is free to wander, and the
+    server averages in the same raw space as its prototypes. drift = mean(1 - cos(learned,
+    received)), a diagnostic of how far the PRD moved the old prototypes."""
+    learned = state.student.detach()
+    unit = learned / learned.norm(dim=1, keepdim=True).clamp_min(1e-12)
+    restored = unit * state.init_norm.unsqueeze(1)
+    drift = float((1.0 - (unit * F.normalize(state.teacher, dim=1)).sum(dim=1)).mean())
+    return (
+        torch.tensor(state.class_ids, dtype=torch.long),
+        restored.cpu(),
+        drift,
+    )
+
+
+def _prd_kwargs(
+    state: Optional[OldPrototypeState],
+    h_shared: Optional[torch.Tensor],
+    learn: bool = True,
+) -> dict:
+    """Extra `_kd_term` arguments for the learnable old prototypes. learn=False (the local
+    branch of the split step) keeps the prototypes but cuts their gradient: they live in the
+    shared space, only the shared embedding is allowed to move them."""
+    if state is None:
+        return {}
+    return dict(
+        prd_prototypes_student=state.student if learn else state.student.detach(),
+        prd_prototypes_teacher=state.teacher,
+        h_prd=h_shared if learn else None,
+    )
+
+
 def _kd_term(
     model: FCLModel,
     h: torch.Tensor,
@@ -399,6 +515,9 @@ def _kd_term(
     kd_temperature: float,
     kd_scale_mode: str = "const",
     kd_logit_scale: float = 1.0,
+    prd_prototypes_student: Optional[torch.Tensor] = None,
+    prd_prototypes_teacher: Optional[torch.Tensor] = None,
+    h_prd: Optional[torch.Tensor] = None,
 ) -> Optional[torch.Tensor]:
     """One KD term. kd_mode: "embedding_mse" | "kl" (per-sample distribution over the old
     prototypes) | "prd" (per-prototype distribution over the batch, PRD) | "kl+prd" (sum).
@@ -411,6 +530,13 @@ def _kd_term(
       hybrid  teacher: kd_logit_scale, student: local scale (kept for comparison only: it
               adds a sharpness-matching term whenever the local scale drifts away from
               kd_logit_scale).
+    For the PRD modes, `prd_prototypes_student` / `prd_prototypes_teacher` (K, d) are the
+    paper's P^t_k / P^{t-1}_k (row k = same class). Default (None): the student uses the
+    classifier's prototypes of `known_sorted` and the teacher reuses them, i.e. P^t = P^{t-1},
+    which is what happens when the prototypes are server constants (see
+    relation_distillation_loss). `h_prd` is the student embedding of the PRD term when it
+    must differ from `h` (the learnable old prototypes live in the SHARED embedding space,
+    so the PRD term is evaluated on the shared embedding, see OldPrototypeState).
     """
     if kd_mode == "embedding_mse":
         return distillation_loss(h, h_teacher)
@@ -441,16 +567,20 @@ def _kd_term(
         )
     if kd_mode in ("prd", "kl+prd"):
         # PRD needs a single old prototype, unlike the per-sample KL (>= 2)
-        reference = (
-            model.classifier.prototypes[known_sorted]
-            if len(known_sorted) >= 1
-            else None
-        )
+        if prd_prototypes_student is not None:
+            reference = prd_prototypes_student
+        else:
+            reference = (
+                model.classifier.prototypes[known_sorted]
+                if len(known_sorted) >= 1
+                else None
+            )
         terms.append(
             relation_distillation_loss(
-                h,
+                h if h_prd is None else h_prd,
                 h_teacher,
                 reference,
+                prd_prototypes_teacher,
                 temperature=kd_temperature,
                 scale_student=s_student,
                 scale_teacher=s_teacher,
@@ -490,6 +620,7 @@ def _split_train_step(
     cls_loss: str = "ce",
     cls_margin: float = 0.2,
     cls_tau: float = 0.1,
+    prd_state: Optional[OldPrototypeState] = None,
 ) -> Optional[torch.Tensor]:
     """One optimisation step with two disjoint objectives.
 
@@ -573,6 +704,7 @@ def _split_train_step(
                 kd_temperature,
                 kd_scale_mode,
                 kd_logit_scale,
+                **_prd_kwargs(prd_state, h_g),
             )
             if kd_g is not None:
                 loss_g = loss_g + lambda_kd_shared * kd_g
@@ -586,6 +718,7 @@ def _split_train_step(
                 kd_temperature,
                 kd_scale_mode,
                 kd_logit_scale,
+                **_prd_kwargs(prd_state, None, learn=False),
             )
             if kd_l is not None:
                 loss_l = loss_l + lambda_kd_local * kd_l
@@ -664,6 +797,9 @@ def train_fn(
     cls_loss: str = "ce",
     cls_margin: float = 0.2,
     cls_tau: float = 0.1,
+    prd_learn_protos: bool = False,
+    prd_proto_lr: Optional[float] = None,
+    prd_out: Optional[dict] = None,
 ) -> float:
     """`local_class_ids`: when given, the CE is restricted to those classes (flag
     ce-local-classes). `proto_prepass`: build provisional local prototypes for classes
@@ -678,7 +814,13 @@ def train_fn(
     `cls_loss` / `cls_margin` / `cls_tau`: classification objective, "ce" (default), a margin
     loss on the prototypes ("triplet" / "contrastive", see _prototype_metric_loss) or a
     batch-aware intra+inter-class objective ("ppp" / "nce" with temperature `cls_tau`, see
-    _prototype_batch_loss). `kd_mode` also accepts "prd" and "kl+prd" (see _kd_term)."""
+    _prototype_batch_loss). `kd_mode` also accepts "prd" and "kl+prd" (see _kd_term).
+    `prd_learn_protos`: the prototypes of the old classes become learnable (see
+    OldPrototypeState), moved by the PRD term evaluated on the SHARED embedding, with an Adam
+    group of learning rate `prd_proto_lr` (default `lr`). Needs kd_mode in {prd, kl+prd}; it
+    is inactive while there is no KD teacher, and in the split mode only the shared KD term
+    (lambda_kd_shared > 0) moves them. When active and `prd_out` is a dict, it is filled with
+    {"class_ids", "prototypes", "num_samples", "drift"} for the upload to the server."""
     if cls_loss not in VALID_CLS_LOSSES:
         raise ValueError(
             f"Unknown cls_loss '{cls_loss}'. Expected one of {VALID_CLS_LOSSES}."
@@ -686,6 +828,11 @@ def train_fn(
     if kd_mode not in VALID_KD_MODES:
         raise ValueError(
             f"Invalid kd_mode: {kd_mode}. Must be one of {VALID_KD_MODES}."
+        )
+    if prd_learn_protos and kd_mode not in ("prd", "kl+prd"):
+        raise ValueError(
+            "prd_learn_protos needs kd_mode 'prd' or 'kl+prd' "
+            f"(got '{kd_mode}'): the learnable prototypes are trained by the PRD term."
         )
 
     model.to(device)
@@ -720,6 +867,19 @@ def train_fn(
     if proto_prepass:
         provisional_prototypes(model, trainloader, device, known_consolidated)
 
+    prd_state: Optional[OldPrototypeState] = None
+    if prd_learn_protos and use_kd and known_sorted:
+        prd_state = make_old_prototype_state(
+            model, known_sorted, _local_label_set(trainloader, local_class_ids)
+        )
+        if prd_state.class_ids:
+            optmizer.add_param_group(
+                {
+                    "params": [prd_state.student],
+                    "lr": lr if prd_proto_lr is None else float(prd_proto_lr),
+                }
+            )
+
     for _ in range(epochs):
         for x, y in _device_batches(
             trainloader, device, max_classes=memory.num_classes
@@ -752,6 +912,7 @@ def train_fn(
                     cls_loss=cls_loss,
                     cls_margin=cls_margin,
                     cls_tau=cls_tau,
+                    prd_state=prd_state,
                 )
                 if step_loss is not None:
                     running_loss = running_loss + step_loss
@@ -822,6 +983,7 @@ def train_fn(
                     kd_temperature,
                     kd_scale_mode,
                     kd_logit_scale,
+                    **_prd_kwargs(prd_state, h_shared),
                 )
                 if l_kd is not None:
                     loss += lambda_kd * l_kd
@@ -835,6 +997,15 @@ def train_fn(
 
             running_loss = running_loss + loss.detach()
             n_batches += 1
+
+    if prd_state is not None and prd_state.class_ids and prd_out is not None:
+        ids, protos, drift = export_old_prototypes(prd_state)
+        prd_out.update(
+            class_ids=ids,
+            prototypes=protos,
+            num_samples=len(trainloader.dataset),
+            drift=drift,
+        )
 
     return float(running_loss) / max(n_batches, 1)
 

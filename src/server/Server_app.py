@@ -150,6 +150,11 @@ def main(grid: Grid, context: Context) -> None:
         min_available_nodes=min_nodes,
         embedding_dim=hidden_dim,
         tau=float(context.run_config.get("tau", 15.0)),
+        old_tau=(
+            float(context.run_config["prd-proto-tau"])
+            if context.run_config.get("prd-proto-tau") is not None
+            else None
+        ),
         fraction_evaluate=fraction_evaluate,
         a_max=a_max,
         candidacy_quorum=float(context.run_config.get("candidacy-quorum", 0.5)),

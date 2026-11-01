@@ -4,7 +4,10 @@ from flwr.app import ArrayRecord, ConfigRecord, Message, MetricRecord
 from flwr.serverapp import Grid
 from flwr.serverapp.strategy import FedProx
 from src.server.AdapterIncorporation import AdapterIncorporationState
-from src.server.PrototypeAggregator import PrototypeAggregator
+from src.server.PrototypeAggregator import (
+    PrototypeAggregator,
+    collect_old_proto_updates,
+)
 
 
 class FedProxStrategy(FedProx):
@@ -12,6 +15,7 @@ class FedProxStrategy(FedProx):
         self,
         embedding_dim: int,
         tau: float = 100.0,
+        old_tau: Optional[float] = None,
         a_max: int = 3,
         candidacy_quorum: float = 0.5,
         incorporation_monitor_rounds: int = 3,
@@ -23,7 +27,7 @@ class FedProxStrategy(FedProx):
     ):
         super().__init__(**kwargs)
         self.proto_aggregator = PrototypeAggregator(
-            embedding_dim=embedding_dim, tau=tau
+            embedding_dim=embedding_dim, tau=tau, old_tau=old_tau
         )
         self._latest_proto_bytes: Optional[bytes] = None
         self.incorporation = AdapterIncorporationState(
@@ -80,8 +84,15 @@ class FedProxStrategy(FedProx):
             if len(class_ids) > 0:
                 client_stats.append((sum_h, counts, class_ids))
 
+        # Old classes have no samples this round: they only move through the prototypes
+        # the clients learned with the PRD term (optional, key absent otherwise).
+        old_updates = collect_old_proto_updates(replies)
+
         if client_stats:
             self.proto_aggregator.aggregate(client_stats)
+        if old_updates:
+            self.proto_aggregator.aggregate_old(old_updates)
+        if client_stats or old_updates:
             mu_all, ids_all = self.proto_aggregator.get_prototypes_raw()
             if len(ids_all) > 0:
                 self._latest_proto_bytes = pickle.dumps((mu_all, ids_all))
