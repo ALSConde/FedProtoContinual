@@ -8,7 +8,7 @@ version = "0.0.7"
 description = "Federated Learning With Prototype and Continual Learning"
 license = "Apache-2.0"
 dependencies = [
-    "flwr[simulation]>=1.26.0",
+    "flwr[simulation]>=1.42.0",
     "flwr-datasets[vision]>=0.5.0",
     "torch",
     "scipy",
@@ -20,6 +20,7 @@ packages = ["."]
 
 [tool.flwr.app]
 publisher = "ALSConde"
+fab-exclude = ["scripts/*", "outputs/*", ".gitignore"]
 
 [tool.flwr.app.components]
 serverapp = "src.server.Server_app:app"
