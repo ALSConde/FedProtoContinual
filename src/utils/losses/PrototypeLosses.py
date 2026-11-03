@@ -188,6 +188,7 @@ def relation_distillation_loss(
     temperature: float = 2.0,
     scale_student: Union[float, torch.Tensor] = 1.0,
     scale_teacher: Optional[Union[float, torch.Tensor]] = None,
+    reduction: str = "sum",
 ) -> Optional[torch.Tensor]:
     """Prototype-sample relation distillation (PRD, Eq. 5-6).
 
@@ -216,11 +217,18 @@ def relation_distillation_loss(
     the paper (Eq. 6, KL(P_t(k) || P_{t-1}(k)) with t the current model and t-1 the
     previous one). Note this is the reverse of the usual distillation direction
     KL(teacher || student): it is mode-seeking, so the student is penalised mostly where it
-    puts mass on samples the teacher considers far from the prototype. SUMMED over the old
-    prototypes, as in Eq. 6 of the paper, and scaled by T^2 like the other KD term (the
-    paper has no T^2). Because of the sum the magnitude grows with the number of old
-    prototypes, so lambda-kd needs to be tuned accordingly.
+    puts mass on samples the teacher considers far from the prototype. Scaled by T^2 like the
+    other KD term (the paper has no T^2).
+
+    reduction over the K prototypes:
+      "sum"   as in Eq. 6 of the paper. The magnitude, and above all the GRADIENT, grows
+              linearly with K: with the near-collinear prototypes of the loss screen the PRD
+              gradient went from ~0.8x to ~7.6x the CE gradient between K=3 and K=27
+              (scripts/prd_magnitude_probe.py), so the weight must be retuned as K grows.
+      "mean"  divided by K: a weight that does not depend on how many classes are known.
     """
+    if reduction not in ("sum", "mean"):
+        raise ValueError(f"reduction must be 'sum' or 'mean', got '{reduction}'.")
     if prototypes_student is None or prototypes_student.shape[0] < 1:
         return None
     if h_student.size(0) < 2:
@@ -247,7 +255,8 @@ def relation_distillation_loss(
     kl_per_proto = F.kl_div(log_q_t, log_q_s, reduction="none", log_target=True).sum(
         dim=0
     )
-    return kl_per_proto.sum() * (temperature**2)
+    reduced = kl_per_proto.sum() if reduction == "sum" else kl_per_proto.mean()
+    return reduced * (temperature**2)
 
 
 @torch.no_grad()

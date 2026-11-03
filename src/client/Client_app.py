@@ -25,6 +25,7 @@ from src.utils.ablation import AblationFlags, as_bool, resolve_ablation_flags
 from .ClientTask import (
     collect_prototype_stats,
     compute_local_contribution_ratio,
+    LossTermProbe,
     prototype_geometry_metrics,
     train_fn,
     test_fn,
@@ -650,6 +651,11 @@ def train(msg: Message, context: Context) -> Message:
         context.run_config.get("prd-learn-protos", False), "prd-learn-protos"
     )
     prd_proto_lr = context.run_config.get("prd-proto-lr")
+    loss_probe = (
+        LossTermProbe()
+        if as_bool(context.run_config.get("log-loss-terms", False), "log-loss-terms")
+        else None
+    )
     prd_out: dict = {}  # filled by train_fn with the learned old prototypes
     train_loss = train_fn(
         model,
@@ -690,7 +696,11 @@ def train(msg: Message, context: Context) -> Message:
         prd_learn_protos=prd_learn_protos,
         prd_proto_lr=None if prd_proto_lr is None else float(prd_proto_lr),
         prd_out=prd_out,
+        prd_reduction=str(context.run_config.get("prd-reduction", "sum")),
+        prd_weight=float(context.run_config.get("prd-weight", 1.0)),
+        loss_probe=loss_probe,
     )
+    loss_term_metrics = loss_probe.summary() if loss_probe is not None else {}
 
     geometry_metrics: dict = {}
     if as_bool(context.run_config.get("log-geometry", False), "log-geometry"):
@@ -760,6 +770,7 @@ def train(msg: Message, context: Context) -> Message:
             **term_metrics,
             **geometry_metrics,
             **prd_metrics,
+            **loss_term_metrics,
             "alpha_mean": alpha_mean,
             # local, learned per client (never aggregated): logged to see how far it drifts from 20
             "classifier_scale": float(model.classifier.scale.detach()),

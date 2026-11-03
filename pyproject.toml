@@ -20,7 +20,6 @@ packages = ["."]
 
 [tool.flwr.app]
 publisher = "ALSConde"
-fab-exclude = ["scripts/*", "outputs/*", ".gitignore"]
 
 [tool.flwr.app.components]
 serverapp = "src.server.Server_app:app"
@@ -118,6 +117,12 @@ log-geometry = false
 # folded into the global ones by EMA. Optional keys: prd-proto-lr (default = round lr),
 # prd-proto-tau (EMA scale of the old classes, default = tau)
 prd-learn-protos = false
+# prd-reduction = "sum" (paper) | "mean" over the old prototypes; prd-weight multiplies the PRD
+# term only (effective weight = lambda-kd * prd-weight, the KL term keeps lambda-kd);
+# log-loss-terms adds lt_* metrics: value and embedding-gradient norm of each loss term.
+prd-reduction = "sum"
+prd-weight = 1.0
+log-loss-terms = false
 expansion-signal = "g"
 interference-floor = 0.5
 expansion-cooldown = 0

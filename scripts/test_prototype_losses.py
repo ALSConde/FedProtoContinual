@@ -555,6 +555,17 @@ def test_geometry_metrics_hook():
     # constant key set: Flower skips aggregation when clients' metric keys differ
     assert set(empty) == set(out), set(empty) ^ set(out)
     assert out["geo_defined"] == 1.0
+    # "old" = known classes ABSENT from the local labels: known_consolidated that also holds
+    # the classes being trained (as in a Class-IL step after its first round) must still
+    # leave the leak numbers measurable, not a constant 0.0
+    leak = prototype_geometry_metrics(model, _loader([3, 4]), DEVICE, {0, 1, 2, 3, 4})
+    assert leak["geo_local_leak_old"] > 0.0, leak
+    # only present classes known -> no old class -> nothing to measure (0.0 by definition)
+    none_old = prototype_geometry_metrics(model, _loader([3, 4]), DEVICE, {3, 4})
+    assert (
+        none_old["geo_local_leak_old"] == 0.0
+        and none_old["geo_local_leak_old_rate"] == 0.0
+    )
     # the hook must leave train/eval mode as it found it
     model.train()
     prototype_geometry_metrics(model, _loader([3, 4]), DEVICE, set())

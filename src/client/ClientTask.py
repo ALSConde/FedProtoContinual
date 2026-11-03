@@ -270,9 +270,11 @@ def prototype_geometry_metrics(
     keys, so a number that is undefined for one client (no prototype yet, no old class...)
     is reported as 0.0 and `defined` tells how many clients really measured it (the
     federated mean of a number mixes those zeros: read it together with `defined`).
-    `known_consolidated` defines which classes count as "old" for the leak numbers (training
-    data of a Class-IL step has none of them, so any mass of the current samples near an old
-    prototype is interference)."""
+    "Old" for the leak numbers = classes in `known_consolidated` that are ABSENT from this
+    client's training labels (the same rule as OldPrototypeState). `known_consolidated` alone
+    would be wrong: after the first round of a step it already contains the classes being
+    learned, so no sample would be left to measure (the leak numbers came out as a constant
+    0.0). Any mass of the current samples near an old prototype is interference."""
     keys = [
         f"{prefix}{view}_{name}"
         for view in ("local", "shared")
@@ -312,11 +314,9 @@ def _prototype_geometry(
             return {}
         y_all = torch.cat(ys)
         protos = model.classifier.prototypes
-        old_ids = (
-            torch.tensor(sorted(known_consolidated), dtype=torch.long, device=device)
-            if known_consolidated
-            else None
-        )
+        present = {int(c) for c in y_all.unique().tolist()}
+        old = sorted(set(known_consolidated) - present)
+        old_ids = torch.tensor(old, dtype=torch.long, device=device) if old else None
         out: dict[str, float] = {}
         for name, hs in (("local", hs_local), ("shared", hs_shared)):
             geo = embedding_geometry(torch.cat(hs), y_all, protos, old_ids)
@@ -416,6 +416,71 @@ def _logits_frozen_scale(classifier, h: torch.Tensor) -> torch.Tensor:
         F.linear(F.normalize(h, dim=1), F.normalize(classifier.prototypes, dim=1))
         * classifier.scale.detach()
     )
+
+
+class LossTermProbe:
+    """Per-term diagnostics of the REAL training: the value and the gradient norm of every
+    loss term, as they enter the objective (already multiplied by their weight).
+
+    The gradient is taken with respect to the embedding the term is computed on
+    (autograd.grad on h only, so it is cheap and does not touch the encoder). It answers the
+    question the loss values cannot: which term steers the update. Reported (mean over the
+    recorded batches of the round, 0.0 when a term never ran):
+        lt_<name>        weighted value        lt_<name>_grad   weighted ||dterm/dh||_F
+    names: cls (CE / ppp / nce / margin loss), proto (L_proto), kl (per-sample KD), prd
+    (relation distillation); with split optimizers each is recorded for the shared (_sh) and
+    the local (_lo) objective. The key set depends only on the run mode, never on the client,
+    because Flower skips the aggregation when the clients' metric keys differ.
+    """
+
+    TERMS = ("cls", "proto", "kl", "prd")
+
+    def __init__(self) -> None:
+        self.names: list[str] = list(self.TERMS)
+        self._val: dict = {}
+        self._grad: dict = {}
+        self._n: dict = {}
+        self.configure(False)
+
+    def configure(self, split: bool) -> None:
+        self.names = (
+            [f"{t}_{b}" for b in ("sh", "lo") for t in self.TERMS]
+            if split
+            else list(self.TERMS)
+        )
+        self._val = {n: 0.0 for n in self.names}
+        self._grad = {n: 0.0 for n in self.names}
+        self._n = {n: 0 for n in self.names}
+
+    def record(
+        self,
+        name: str,
+        term: Optional[torch.Tensor],
+        wrt: Optional[torch.Tensor],
+        weight: float = 1.0,
+    ) -> None:
+        if (
+            term is None
+            or wrt is None
+            or name not in self._val
+            or not term.requires_grad
+            or not wrt.requires_grad
+        ):
+            return
+        weighted = term * weight
+        (g,) = torch.autograd.grad(weighted, wrt, retain_graph=True, allow_unused=True)
+        self._val[name] = self._val[name] + weighted.detach()
+        if g is not None:
+            self._grad[name] = self._grad[name] + g.norm().detach()
+        self._n[name] += 1
+
+    def summary(self, prefix: str = "lt_") -> dict[str, float]:
+        out: dict[str, float] = {}
+        for name in self.names:
+            n = max(self._n[name], 1)
+            out[f"{prefix}{name}"] = float(self._val[name]) / n
+            out[f"{prefix}{name}_grad"] = float(self._grad[name]) / n
+        return out
 
 
 @dataclass
@@ -518,6 +583,11 @@ def _kd_term(
     prd_prototypes_student: Optional[torch.Tensor] = None,
     prd_prototypes_teacher: Optional[torch.Tensor] = None,
     h_prd: Optional[torch.Tensor] = None,
+    prd_reduction: str = "sum",
+    prd_weight: float = 1.0,
+    probe: Optional[LossTermProbe] = None,
+    probe_weight: float = 1.0,
+    probe_suffix: str = "",
 ) -> Optional[torch.Tensor]:
     """One KD term. kd_mode: "embedding_mse" | "kl" (per-sample distribution over the old
     prototypes) | "prd" (per-prototype distribution over the batch, PRD) | "kl+prd" (sum).
@@ -537,6 +607,10 @@ def _kd_term(
     relation_distillation_loss). `h_prd` is the student embedding of the PRD term when it
     must differ from `h` (the learnable old prototypes live in the SHARED embedding space,
     so the PRD term is evaluated on the shared embedding, see OldPrototypeState).
+    `prd_reduction` ("sum" | "mean" over the old prototypes) and `prd_weight` (multiplies the
+    PRD term only; the caller's lambda_kd then weights KL + prd_weight * PRD, so the PRD
+    weight is lambda_kd * prd_weight and the KL one stays lambda_kd). `probe` records the
+    KL and PRD components with `probe_weight` (the caller's lambda) as `kl`/`prd` + suffix.
     """
     if kd_mode == "embedding_mse":
         return distillation_loss(h, h_teacher)
@@ -555,16 +629,17 @@ def _kd_term(
             if len(known_sorted) >= 2
             else None
         )
-        terms.append(
-            distillation_loss_kl(
-                h,
-                h_teacher,
-                reference,
-                temperature=kd_temperature,
-                scale_student=s_student,
-                scale_teacher=s_teacher,
-            )
+        kl_term = distillation_loss_kl(
+            h,
+            h_teacher,
+            reference,
+            temperature=kd_temperature,
+            scale_student=s_student,
+            scale_teacher=s_teacher,
         )
+        if probe is not None:
+            probe.record(f"kl{probe_suffix}", kl_term, h, probe_weight)
+        terms.append(kl_term)
     if kd_mode in ("prd", "kl+prd"):
         # PRD needs a single old prototype, unlike the per-sample KL (>= 2)
         if prd_prototypes_student is not None:
@@ -575,17 +650,24 @@ def _kd_term(
                 if len(known_sorted) >= 1
                 else None
             )
-        terms.append(
-            relation_distillation_loss(
-                h if h_prd is None else h_prd,
-                h_teacher,
-                reference,
-                prd_prototypes_teacher,
-                temperature=kd_temperature,
-                scale_student=s_student,
-                scale_teacher=s_teacher,
-            )
+        h_student_prd = h if h_prd is None else h_prd
+        prd_term = relation_distillation_loss(
+            h_student_prd,
+            h_teacher,
+            reference,
+            prd_prototypes_teacher,
+            temperature=kd_temperature,
+            scale_student=s_student,
+            scale_teacher=s_teacher,
+            reduction=prd_reduction,
         )
+        if probe is not None:
+            probe.record(
+                f"prd{probe_suffix}", prd_term, h_student_prd, probe_weight * prd_weight
+            )
+        if prd_term is not None:
+            prd_term = prd_term * prd_weight
+        terms.append(prd_term)
     terms = [t for t in terms if t is not None]
     if not terms:
         return None
@@ -621,6 +703,9 @@ def _split_train_step(
     cls_margin: float = 0.2,
     cls_tau: float = 0.1,
     prd_state: Optional[OldPrototypeState] = None,
+    prd_reduction: str = "sum",
+    prd_weight: float = 1.0,
+    probe: Optional[LossTermProbe] = None,
 ) -> Optional[torch.Tensor]:
     """One optimisation step with two disjoint objectives.
 
@@ -656,6 +741,9 @@ def _split_train_step(
         cls_tau,
     )
     lp_g = prototype_alignment_loss(h_g, y, protos, known_consolidated)
+    if probe is not None:
+        probe.record("cls_sh", ce_g, h_g)
+        probe.record("proto_sh", lp_g, h_g, lambda_proto_shared)
     if has_shadow:
         ce_with = _cls_loss(
             model,
@@ -688,6 +776,9 @@ def _split_train_step(
     )
     loss_l = ce_l
     lp_l = prototype_alignment_loss(h_l, y, protos, known_consolidated)
+    if probe is not None:
+        probe.record("cls_lo", ce_l, h_l)
+        probe.record("proto_lo", lp_l, h_l, lambda_proto_local)
     if lp_l is not None:
         loss_l = loss_l + lambda_proto_local * lp_l
 
@@ -704,6 +795,11 @@ def _split_train_step(
                 kd_temperature,
                 kd_scale_mode,
                 kd_logit_scale,
+                prd_reduction=prd_reduction,
+                prd_weight=prd_weight,
+                probe=probe,
+                probe_weight=lambda_kd_shared,
+                probe_suffix="_sh",
                 **_prd_kwargs(prd_state, h_g),
             )
             if kd_g is not None:
@@ -718,6 +814,11 @@ def _split_train_step(
                 kd_temperature,
                 kd_scale_mode,
                 kd_logit_scale,
+                prd_reduction=prd_reduction,
+                prd_weight=prd_weight,
+                probe=probe,
+                probe_weight=lambda_kd_local,
+                probe_suffix="_lo",
                 **_prd_kwargs(prd_state, None, learn=False),
             )
             if kd_l is not None:
@@ -800,6 +901,9 @@ def train_fn(
     prd_learn_protos: bool = False,
     prd_proto_lr: Optional[float] = None,
     prd_out: Optional[dict] = None,
+    prd_reduction: str = "sum",
+    prd_weight: float = 1.0,
+    loss_probe: Optional[LossTermProbe] = None,
 ) -> float:
     """`local_class_ids`: when given, the CE is restricted to those classes (flag
     ce-local-classes). `proto_prepass`: build provisional local prototypes for classes
@@ -820,7 +924,11 @@ def train_fn(
     group of learning rate `prd_proto_lr` (default `lr`). Needs kd_mode in {prd, kl+prd}; it
     is inactive while there is no KD teacher, and in the split mode only the shared KD term
     (lambda_kd_shared > 0) moves them. When active and `prd_out` is a dict, it is filled with
-    {"class_ids", "prototypes", "num_samples", "drift"} for the upload to the server."""
+    {"class_ids", "prototypes", "num_samples", "drift"} for the upload to the server.
+    `prd_reduction` ("sum" | "mean" over the old prototypes) and `prd_weight` (relative to
+    lambda_kd, PRD term only) control the magnitude of the PRD term. `loss_probe` records the
+    value and the embedding-gradient norm of every loss term (see LossTermProbe); off by
+    default, and it never changes the training."""
     if cls_loss not in VALID_CLS_LOSSES:
         raise ValueError(
             f"Unknown cls_loss '{cls_loss}'. Expected one of {VALID_CLS_LOSSES}."
@@ -828,6 +936,10 @@ def train_fn(
     if kd_mode not in VALID_KD_MODES:
         raise ValueError(
             f"Invalid kd_mode: {kd_mode}. Must be one of {VALID_KD_MODES}."
+        )
+    if prd_reduction not in ("sum", "mean"):
+        raise ValueError(
+            f"Invalid prd_reduction: {prd_reduction}. Must be 'sum' or 'mean'."
         )
     if prd_learn_protos and kd_mode not in ("prd", "kl+prd"):
         raise ValueError(
@@ -841,6 +953,8 @@ def train_fn(
     known_sorted = sorted(known_consolidated)
 
     split_active = bool(split_optimizers and model.use_local_adapter)
+    if loss_probe is not None:
+        loss_probe.configure(split_active)
     use_kd = lambda_kd > 0.0 or (split_active and lambda_kd_shared > 0.0)
     embed_global = None
     if use_kd:
@@ -913,6 +1027,9 @@ def train_fn(
                     cls_margin=cls_margin,
                     cls_tau=cls_tau,
                     prd_state=prd_state,
+                    prd_reduction=prd_reduction,
+                    prd_weight=prd_weight,
+                    probe=loss_probe,
                 )
                 if step_loss is not None:
                     running_loss = running_loss + step_loss
@@ -940,6 +1057,9 @@ def train_fn(
             l_proto = prototype_alignment_loss(
                 h, y, model.classifier.prototypes, known_consolidated
             )
+            if loss_probe is not None:
+                loss_probe.record("cls", ce, h)
+                loss_probe.record("proto", l_proto, h, lambda_proto)
             if has_shadow:
                 # Both views train (nothing is frozen). Dropout-like pairing keeps the
                 # model good without the candidate, so the later with/without
@@ -983,6 +1103,10 @@ def train_fn(
                     kd_temperature,
                     kd_scale_mode,
                     kd_logit_scale,
+                    prd_reduction=prd_reduction,
+                    prd_weight=prd_weight,
+                    probe=loss_probe,
+                    probe_weight=lambda_kd,
                     **_prd_kwargs(prd_state, h_shared),
                 )
                 if l_kd is not None:
