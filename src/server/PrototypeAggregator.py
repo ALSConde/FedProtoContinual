@@ -25,6 +25,25 @@ def collect_old_proto_updates(
     return updates
 
 
+def collect_old_proto_drift(
+    replies: Iterable,
+) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """Drift sums (class_ids, sum_delta (K, d), mass (K,)) attached by the clients under the
+    key 'old_proto_drift' of the 'config' record (flag drift-comp). Others are skipped.
+    """
+    updates = []
+    for reply in replies:
+        if not reply.has_content():
+            continue
+        config_record = reply.content.get("config")
+        if config_record is None or "old_proto_drift" not in config_record:
+            continue
+        ids, sum_delta, mass = pickle.loads(config_record["old_proto_drift"])
+        if len(ids) > 0:
+            updates.append((ids, sum_delta, mass))
+    return updates
+
+
 class PrototypeAggregator:
     """
     Federated prototype aggregator — runs on the Flower server.
@@ -228,6 +247,47 @@ class PrototypeAggregator:
             updated
         ] + alpha * p_bar
         return updated
+
+    def aggregate_drift(
+        self,
+        drift_updates: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Semantic-drift compensation of OLD classes (see ClientTask.compute_old_prototype_drift).
+
+        Args:
+            drift_updates: per client (class_ids (K,), sum_delta (K, d), mass (K,)): the
+                           kernel-weighted sums of the shift of its local samples around each
+                           old prototype and the total kernel mass (a soft count of the samples
+                           near it).
+        For each class k reported by at least one client:
+            δ̄_k = Σ_c sum_delta_{k,c} / Σ_c mass_{k,c}      (drift of the samples near p_k)
+            N_k = Σ_c mass_{k,c}
+            α_k = 1 - exp(-N_k / τ_old)
+            μ_k ← μ_k + α_k δ̄_k
+        Little data near a prototype (small mass) means a small correction. Classes the server
+        has not initialised are ignored. Returns the ids of the shifted classes.
+        """
+        sum_d = torch.zeros(self.num_classes, self.embedding_dim)
+        total_mass = torch.zeros(self.num_classes)
+        for ids, sum_delta, mass in drift_updates:
+            ids = torch.as_tensor(ids, dtype=torch.long)
+            sum_delta = torch.as_tensor(sum_delta, dtype=torch.float32)
+            mass = torch.as_tensor(mass, dtype=torch.float32)
+            if len(ids) == 0:
+                continue
+            ok = (ids < self.num_classes) & (mass > 0)
+            ids, sum_delta, mass = ids[ok], sum_delta[ok], mass[ok]
+            known = self.initialized[ids]
+            ids, sum_delta, mass = ids[known], sum_delta[known], mass[known]
+            sum_d[ids] += sum_delta
+            total_mass[ids] += mass
+        shifted = (total_mass > 1e-8).nonzero(as_tuple=False).squeeze(1)
+        if len(shifted) == 0:
+            return shifted
+        delta_bar = sum_d[shifted] / total_mass[shifted].unsqueeze(1)
+        alpha = (1.0 - torch.exp(-total_mass[shifted] / self.old_tau)).unsqueeze(1)
+        self.mu_global[shifted] = self.mu_global[shifted] + alpha * delta_bar
+        return shifted
 
     # ------------------------------------------------------------------
     # Growth management

@@ -6,6 +6,7 @@ from flwr.serverapp.strategy import FedProx
 from src.server.AdapterIncorporation import AdapterIncorporationState
 from src.server.PrototypeAggregator import (
     PrototypeAggregator,
+    collect_old_proto_drift,
     collect_old_proto_updates,
 )
 
@@ -87,12 +88,16 @@ class FedProxStrategy(FedProx):
         # Old classes have no samples this round: they only move through the prototypes
         # the clients learned with the PRD term (optional, key absent otherwise).
         old_updates = collect_old_proto_updates(replies)
+        drift_updates = collect_old_proto_drift(replies)
 
         if client_stats:
             self.proto_aggregator.aggregate(client_stats)
         if old_updates:
             self.proto_aggregator.aggregate_old(old_updates)
-        if client_stats or old_updates:
+        if drift_updates:
+            # old prototypes follow the drift of the local samples around them
+            self.proto_aggregator.aggregate_drift(drift_updates)
+        if client_stats or old_updates or drift_updates:
             mu_all, ids_all = self.proto_aggregator.get_prototypes_raw()
             if len(ids_all) > 0:
                 self._latest_proto_bytes = pickle.dumps((mu_all, ids_all))

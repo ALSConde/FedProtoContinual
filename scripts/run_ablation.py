@@ -136,6 +136,32 @@ _LOSS_CELLS: dict[str, dict[str, Any]] = {
     # exploratory (not part of the factorial): old prototypes learned by the PRD and
     # folded into the global ones by the server EMA
     "ppp_prd_learn": {"cls-loss": "ppp", "kd-mode": "prd", "prd-learn-protos": True},
+    # exploratory, built on ppp_kl (the loss-screen winner): PRD ADDED to the KL (mean over the
+    # old prototypes) instead of replacing it, restricted or not to the old classes, and the
+    # semantic-drift compensation of the old prototypes alone and combined
+    "ppp_klprd": {"cls-loss": "ppp", "kd-mode": "kl+prd", "prd-reduction": "mean"},
+    "ppp_klprd_old": {
+        "cls-loss": "ppp",
+        "kd-mode": "kl+prd",
+        "prd-reduction": "mean",
+        "prd-old-only": True,
+    },
+    # drift-comp-sigma 0.5: the tightest bandwidth was the best in scripts/sdc_probe.py (toy data,
+    # so a starting point, not a tuned value)
+    "ppp_kl_sdc": {
+        "cls-loss": "ppp",
+        "kd-mode": "kl",
+        "drift-comp": True,
+        "drift-comp-sigma": 0.5,
+    },
+    "ppp_klprd_old_sdc": {
+        "cls-loss": "ppp",
+        "kd-mode": "kl+prd",
+        "prd-reduction": "mean",
+        "prd-old-only": True,
+        "drift-comp": True,
+        "drift-comp-sigma": 0.5,
+    },
 }
 
 
@@ -230,6 +256,11 @@ def default_pairs(profiles: list[str]) -> list[tuple[str, str]]:
             ("ppp_prd", "ppp_kl"),  # PRD on top of PPP
             ("ppp_prd", "ce_prd"),  # PPP on top of PRD
             ("ppp_prd_learn", "ppp_prd"),  # exploratory: learnable old prototypes
+            ("ppp_klprd", "ppp_kl"),  # exploratory: PRD (mean) on top of the KL
+            ("ppp_klprd_old", "ppp_kl"),  # ... restricted to the old classes
+            ("ppp_klprd_old", "ppp_klprd"),  # effect of the old-only restriction
+            ("ppp_kl_sdc", "ppp_kl"),  # drift compensation alone
+            ("ppp_klprd_old_sdc", "ppp_kl"),  # everything together
         ):
             if cell(treat) in profiles and cell(ref) in profiles:
                 pairs.append((cell(treat), cell(ref)))
@@ -512,9 +543,8 @@ def report(args) -> None:
     metrics = [m.strip() for m in args.metrics.split(",")]
     profiles = list(data)
     order = [p for p in [*LADDER, *LOO, *LOSS, *LOSS_FULL] if p in profiles] + [
-        p
-        for p in profiles
-        if p not in LADDER and p not in LOO and p not in LOSS and p not in LOSS_FULL
+        p for p in profiles if p not in LADDER and p not in LOO
+        and p not in LOSS and p not in LOSS_FULL
     ]
 
     if args.pairs:

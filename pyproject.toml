@@ -123,6 +123,13 @@ prd-learn-protos = false
 prd-reduction = "sum"
 prd-weight = 1.0
 log-loss-terms = false
+# prd-old-only: the PRD term uses only the known classes ABSENT from the client data (paper P_o),
+# with constant prototypes. drift-comp: clients send the semantic drift of their samples around
+# the old prototypes and the server shifts them (EMA, scale prd-proto-tau); drift-comp-sigma is
+# the kernel bandwidth as a multiple of the RMS distance to each prototype.
+prd-old-only = false
+drift-comp = false
+drift-comp-sigma = 1.0
 expansion-signal = "g"
 interference-floor = 0.5
 expansion-cooldown = 0

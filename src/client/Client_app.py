@@ -26,6 +26,7 @@ from .ClientTask import (
     collect_prototype_stats,
     compute_local_contribution_ratio,
     LossTermProbe,
+    compute_old_prototype_drift,
     prototype_geometry_metrics,
     train_fn,
     test_fn,
@@ -651,6 +652,16 @@ def train(msg: Message, context: Context) -> Message:
         context.run_config.get("prd-learn-protos", False), "prd-learn-protos"
     )
     prd_proto_lr = context.run_config.get("prd-proto-lr")
+    prd_old_only = as_bool(
+        context.run_config.get("prd-old-only", False), "prd-old-only"
+    )
+    drift_comp = as_bool(context.run_config.get("drift-comp", False), "drift-comp")
+    start_model = (
+        # the model as received (before this round's training): the reference for the drift
+        copy.deepcopy(model).to(device).eval()
+        if drift_comp and known_consolidated
+        else None
+    )
     loss_probe = (
         LossTermProbe()
         if as_bool(context.run_config.get("log-loss-terms", False), "log-loss-terms")
@@ -699,6 +710,7 @@ def train(msg: Message, context: Context) -> Message:
         prd_reduction=str(context.run_config.get("prd-reduction", "sum")),
         prd_weight=float(context.run_config.get("prd-weight", 1.0)),
         loss_probe=loss_probe,
+        prd_old_only=prd_old_only,
     )
     loss_term_metrics = loss_probe.summary() if loss_probe is not None else {}
 
@@ -731,6 +743,39 @@ def train(msg: Message, context: Context) -> Message:
         prd_metrics = {
             "prd_old_classes": float(len(prd_out["class_ids"])) if prd_out else 0.0,
             "prd_proto_drift": float(prd_out["drift"]) if prd_out else 0.0,
+        }
+
+    dc_metrics: dict = {}
+    if drift_comp:
+        drift = (
+            compute_old_prototype_drift(
+                model,
+                start_model,
+                train_loader,
+                device,
+                known_consolidated,
+                float(context.run_config.get("drift-comp-sigma", 1.0)),
+            )
+            if start_model is not None
+            else None
+        )
+        if drift is not None:
+            config_reply_data["old_proto_drift"] = pickle.dumps(drift)
+        ids_d, sum_d, mass_d = drift if drift is not None else (None, None, None)
+        # constant key set across clients (Flower skips aggregation otherwise)
+        dc_metrics = {
+            "dc_old_classes": float(len(ids_d)) if drift is not None else 0.0,
+            "dc_drift_rel": (
+                float(
+                    (
+                        (sum_d / mass_d.clamp_min(1e-12).unsqueeze(1)).norm(dim=1)
+                        / model.classifier.prototypes[ids_d].cpu().norm(dim=1)
+                    ).mean()
+                )
+                if drift is not None
+                else 0.0
+            ),
+            "dc_mass_mean": float(mass_d.mean()) if drift is not None else 0.0,
         }
 
     alpha_mean = model.alpha_gate.mean_alpha() if flags.use_local_adapter else 0.0
@@ -771,6 +816,7 @@ def train(msg: Message, context: Context) -> Message:
             **geometry_metrics,
             **prd_metrics,
             **loss_term_metrics,
+            **dc_metrics,
             "alpha_mean": alpha_mean,
             # local, learned per client (never aggregated): logged to see how far it drifts from 20
             "classifier_scale": float(model.classifier.scale.detach()),

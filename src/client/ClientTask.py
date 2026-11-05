@@ -500,9 +500,12 @@ class OldPrototypeState:
     """
 
     class_ids: list
-    student: torch.nn.Parameter  # (K, d) P^t, trained
+    student: torch.nn.Parameter  # (K, d) P^t, trained when `learnable`, else a constant
     teacher: torch.Tensor  # (K, d) P^{t-1}, frozen snapshot
     init_norm: torch.Tensor  # (K,) norm of the received prototypes
+    learnable: bool = (
+        True  # False: only restricts the PRD to the old classes (prd_old_only)
+    )
 
 
 def _local_label_set(
@@ -518,7 +521,10 @@ def _local_label_set(
 
 
 def make_old_prototype_state(
-    model: FCLModel, known_sorted: Sequence[int], local_labels: set
+    model: FCLModel,
+    known_sorted: Sequence[int],
+    local_labels: set,
+    learnable: bool = True,
 ) -> OldPrototypeState:
     protos = model.classifier.prototypes
     ids = [
@@ -529,9 +535,10 @@ def make_old_prototype_state(
     init = protos[ids].detach().clone()
     return OldPrototypeState(
         class_ids=ids,
-        student=torch.nn.Parameter(init.clone()),
+        student=torch.nn.Parameter(init.clone(), requires_grad=learnable),
         teacher=init,
         init_norm=init.norm(dim=1),
+        learnable=learnable,
     )
 
 
@@ -554,6 +561,66 @@ def export_old_prototypes(
     )
 
 
+@torch.no_grad()
+def compute_old_prototype_drift(
+    model: FCLModel,
+    start_model: FCLModel,
+    loader: DataLoader,
+    device: torch.device,
+    known_consolidated: set,
+    sigma_factor: float = 1.0,
+) -> Optional[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """Semantic-drift compensation of the OLD prototypes (SDC, Yu et al. 2020), from the
+    client's own data and without any old sample.
+
+    `start_model` is the model as received at the start of the round, `model` the trained
+    one. Both embed the same local batches (shared embedding, the space of the prototypes).
+    For every old class k (known, absent from the local labels, prototype exists):
+        w_ik  = exp(-||f_start(x_i) - p_k||^2 / (2 sigma_k^2))
+        delta = sum_i w_ik (f_trained(x_i) - f_start(x_i))        (K, d)
+        mass  = sum_i w_ik                                          (K,)
+    so delta / mass is the drift of the local samples that sit near p_k, which is where the
+    old samples of class k probably moved too. sigma_k^2 = sigma_factor^2 * mean_i of the
+    squared distance of the local samples to p_k (adaptive bandwidth). The sums, not the
+    ratio, are returned: the server adds them across clients (a weighted mean) and uses
+    `mass` as the evidence of its EMA (PrototypeAggregator.aggregate_drift).
+    Returns None when there is no old class or no data.
+    """
+    protos = model.classifier.prototypes
+    num_classes = protos.shape[0]
+    if num_classes == 0:
+        return None
+    was_training = model.training
+    model.eval()
+    start_model.eval()
+    try:
+        h0, h1, ys = [], [], []
+        for x, y in _device_batches(loader, device, max_classes=num_classes):
+            h0.append(start_model.embed_both(x)[1])
+            h1.append(model.embed_both(x)[1])
+            ys.append(y)
+    finally:
+        model.train(was_training)
+    if not ys:
+        return None
+    h0, h1, y_all = torch.cat(h0), torch.cat(h1), torch.cat(ys)
+    present = {int(c) for c in y_all.unique().tolist()}
+    old = [
+        c
+        for c in sorted(known_consolidated)
+        if c not in present and c < num_classes and float(protos[c].norm()) > 0
+    ]
+    if not old:
+        return None
+    ref = protos[old].to(h0.device)  # (K, d) in the space of the start model
+    d2 = torch.cdist(h0, ref) ** 2  # (N, K)
+    sigma2 = (sigma_factor**2) * d2.mean(dim=0, keepdim=True).clamp_min(1e-12)
+    w = torch.exp(-d2 / (2.0 * sigma2))  # (N, K)
+    sum_delta = w.t() @ (h1 - h0)  # (K, d)
+    mass = w.sum(dim=0)  # (K,)
+    return torch.tensor(old, dtype=torch.long), sum_delta.cpu(), mass.cpu()
+
+
 def _prd_kwargs(
     state: Optional[OldPrototypeState],
     h_shared: Optional[torch.Tensor],
@@ -564,10 +631,13 @@ def _prd_kwargs(
     shared space, only the shared embedding is allowed to move them."""
     if state is None:
         return {}
+    # a constant (old-only) reference keeps the embedding the PRD always used; only the
+    # learnable prototypes live in, and are moved through, the shared embedding space
+    use_shared = learn and state.learnable
     return dict(
         prd_prototypes_student=state.student if learn else state.student.detach(),
         prd_prototypes_teacher=state.teacher,
-        h_prd=h_shared if learn else None,
+        h_prd=h_shared if use_shared else None,
     )
 
 
@@ -904,6 +974,7 @@ def train_fn(
     prd_reduction: str = "sum",
     prd_weight: float = 1.0,
     loss_probe: Optional[LossTermProbe] = None,
+    prd_old_only: bool = False,
 ) -> float:
     """`local_class_ids`: when given, the CE is restricted to those classes (flag
     ce-local-classes). `proto_prepass`: build provisional local prototypes for classes
@@ -928,7 +999,11 @@ def train_fn(
     `prd_reduction` ("sum" | "mean" over the old prototypes) and `prd_weight` (relative to
     lambda_kd, PRD term only) control the magnitude of the PRD term. `loss_probe` records the
     value and the embedding-gradient norm of every loss term (see LossTermProbe); off by
-    default, and it never changes the training."""
+    default, and it never changes the training.
+    `prd_old_only`: the PRD term uses only the known classes that are ABSENT from the client's
+    training labels (the paper's P_o: classes of previous tasks), with constant prototypes,
+    instead of every known class (which also freezes the relations of the classes being
+    learned). The KL term is unaffected. Implied when `prd_learn_protos` is on."""
     if cls_loss not in VALID_CLS_LOSSES:
         raise ValueError(
             f"Unknown cls_loss '{cls_loss}'. Expected one of {VALID_CLS_LOSSES}."
@@ -941,10 +1016,10 @@ def train_fn(
         raise ValueError(
             f"Invalid prd_reduction: {prd_reduction}. Must be 'sum' or 'mean'."
         )
-    if prd_learn_protos and kd_mode not in ("prd", "kl+prd"):
+    if (prd_learn_protos or prd_old_only) and kd_mode not in ("prd", "kl+prd"):
         raise ValueError(
-            "prd_learn_protos needs kd_mode 'prd' or 'kl+prd' "
-            f"(got '{kd_mode}'): the learnable prototypes are trained by the PRD term."
+            "prd_learn_protos / prd_old_only need kd_mode 'prd' or 'kl+prd' "
+            f"(got '{kd_mode}'): they act on the PRD term."
         )
 
     model.to(device)
@@ -982,11 +1057,14 @@ def train_fn(
         provisional_prototypes(model, trainloader, device, known_consolidated)
 
     prd_state: Optional[OldPrototypeState] = None
-    if prd_learn_protos and use_kd and known_sorted:
+    if (prd_learn_protos or prd_old_only) and use_kd and known_sorted:
         prd_state = make_old_prototype_state(
-            model, known_sorted, _local_label_set(trainloader, local_class_ids)
+            model,
+            known_sorted,
+            _local_label_set(trainloader, local_class_ids),
+            learnable=prd_learn_protos,
         )
-        if prd_state.class_ids:
+        if prd_learn_protos and prd_state.class_ids:
             optmizer.add_param_group(
                 {
                     "params": [prd_state.student],
@@ -1122,7 +1200,12 @@ def train_fn(
             running_loss = running_loss + loss.detach()
             n_batches += 1
 
-    if prd_state is not None and prd_state.class_ids and prd_out is not None:
+    if (
+        prd_state is not None
+        and prd_state.learnable
+        and prd_state.class_ids
+        and prd_out is not None
+    ):
         ids, protos, drift = export_old_prototypes(prd_state)
         prd_out.update(
             class_ids=ids,
