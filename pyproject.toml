@@ -98,7 +98,7 @@ enable-expansion = true
 enable-incorporation = true
 enable-kd = true
 # --- prototype / CE behaviour flags (default off = previous behaviour) ---
-ce-local-classes = false
+ce-local-classes = true
 proto-prepass = false
 proto-postpass = false
 # --- optimizer split / lr groups / local-branch init (defaults = previous behaviour) ---
@@ -120,7 +120,7 @@ prd-learn-protos = false
 # prd-reduction = "sum" (paper) | "mean" over the old prototypes; prd-weight multiplies the PRD
 # term only (effective weight = lambda-kd * prd-weight, the KL term keeps lambda-kd);
 # log-loss-terms adds lt_* metrics: value and embedding-gradient norm of each loss term.
-prd-reduction = "sum"
+prd-reduction = "mean"
 prd-weight = 1.0
 log-loss-terms = false
 # prd-old-only: the PRD term uses only the known classes ABSENT from the client data (paper P_o),
